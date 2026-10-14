@@ -1186,16 +1186,20 @@ test("a successful scan caches the subtitle for the next open", () => {
 
 test("the subtitle cache keeps only the newest files", () => {
   const { g } = boot();
+  // Entries as the API really returns them: no "filename", and a path whose
+  // form is not known. The name comes from whichever field carries it, and
+  // the delete uses the "@data/<name>" form the writer itself accepts.
   const files = [
     { filename: "sidekick-sub-36658--1--1--100.srt", path: "@data/a" },
-    { filename: "sidekick-sub-36658--1--1--300.srt", path: "@data/b" },
-    { filename: "sidekick-sub-1399-1-2--200.srt", path: "@data/c" },
-    { filename: "other.txt", path: "@data/d" },
-    { filename: "sidekick-sub-broken.srt", path: "@data/e" }
+    { path: "sidekick-sub-36658--1--1--300.srt" },
+    { name: "sidekick-sub-1399-1-2--200.srt" },
+    { filename: "other.txt" },
+    { filename: "sidekick-sub-broken.srt" }
   ];
   assert.equal(g.subtitleFilesToPrune(files, 3).length, 0, "nothing should go under the cap");
   // Joined, because the array is built inside the vm realm.
-  assert.equal(g.subtitleFilesToPrune(files, 2).join(","), "@data/a",
+  assert.equal(g.subtitleFilesToPrune(files, 2).join(","),
+    "@data/sidekick-sub-36658--1--1--100.srt",
     "the oldest cached subtitle was kept");
 });
 
@@ -1877,4 +1881,73 @@ test("the scan failures explain themselves in the status line", () => {
   h.iina._emit("subScanResult", { ok: false, reason: "read-failed", auto: true });
   assert.equal(h.document.getElementById("ddd-status").textContent, "MARKER",
     "an auto failure was not silent");
+});
+
+// ── main.js fixes from the audit ────────────────────────────────────
+
+test("the newest cached subtitle is the one that resolves", () => {
+  // The loop returned the first match, whatever order the listing came in,
+  // though the comment promised newest-wins. The entries also carry the name
+  // in whichever field the API happens to use.
+  const m = loadMain({
+    status: { paused: false, duration: 4000, url: "file:///v/a.mkv" },
+    file: {
+      list: () => [
+        { name: "sidekick-sub-1399-1-2--100.srt" },     // oldest, listed first
+        { path: "sidekick-sub-1399-1-2--300.srt" },
+        { filename: "sidekick-sub-1399-1-2--200.srt" }
+      ]
+    }
+  });
+  assert.equal(m.global.cachedSubtitlePath({ tmdbId: 1399, season: 1, episode: 2 }),
+    "@data/sidekick-sub-1399-1-2--300.srt");
+});
+
+test("the mpv seek fallback uses one combined flags argument", () => {
+  // "seek <target> absolute exact" is not a valid mpv command — the flags are
+  // one word, "absolute+exact" — and mpv.command reports no failure, so this
+  // step used to claim success without moving the playhead.
+  const calls = [];
+  const m = loadMain({ status: { paused: false, duration: 4000, url: "file:///v/a.mkv" } });
+  m.global.iina.core.seekTo = () => { throw new Error("seekTo unavailable"); };
+  m.global.iina.mpv.command = (name, args) => { calls.push([name, args]); };
+  assert.equal(m.global.seekAbsolute(42), "mpv seek absolute");
+  assert.equal(calls[0][0], "seek");
+  // Joined, because the argument array is built inside the vm realm.
+  assert.equal(calls[0][1].join(","), "42,absolute+exact");
+});
+
+test("'Search again' with the feature off is a refusal, not an empty answer", () => {
+  // stale:false is the same shape as a real "nothing found", and the sidebar
+  // prints exactly that — a claim about the episode that was never checked.
+  const m = loadMain({ status: { paused: false, duration: 4000, url: "file:///v/a.mkv" } });
+  m.emit("iina.window-loaded");
+  m.runTimers();
+  m.fromWebView("sidebar", "episodeSelected", EPISODE);
+  m.fromWebView("sidebar", "refreshSkip", {});
+  assert.equal(m.posted("sidebar", "skipResult").pop().stale, true,
+    "the sidebar would print 'Nothing found for this episode'");
+  m.fromWebView("sidebar", "refreshScenes", {});
+  assert.equal(m.posted("sidebar", "scenesResult").pop().stale, true,
+    "the sidebar would print 'Nothing found for this episode'");
+});
+
+test("a key verdict for a key the user already replaced is dropped", async () => {
+  // The check and the key it checked were not tied together, and the sidebar
+  // deletes the stored key on an "invalid" verdict: a late 401 for key A
+  // removed the new, valid key B.
+  let release;
+  const m = loadMain({
+    status: { paused: false, duration: 4000, url: "file:///v/a.mkv" },
+    http: { [DDD_TOPICS]: () => new Promise((res) => { release = res; }) }
+  });
+  m.emit("iina.window-loaded");
+  m.runTimers();
+  m.fromWebView("sidebar", "setDddKey", { key: "A" });
+  const releaseA = release;
+  m.fromWebView("sidebar", "setDddKey", { key: "B" });
+  releaseA({ statusCode: 401 });           // A's verdict lands after B replaced it
+  await settle();
+  assert.deepEqual(m.posted("sidebar", "dddKeyCheck"), [],
+    "a verdict for the replaced key was delivered");
 });

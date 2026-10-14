@@ -47,9 +47,10 @@ NAME="$(basename "$ARTIFACT")"
 
 LISTING="$(unzip -l "$ARTIFACT")"
 
-# The entry file and every sidebar module must be in. A package missing one
-# loads as a blank sidebar or a dead entry point, with no error anywhere.
-for f in Info.json main.js overlay.html sidebar.html; do
+# The entry file, both views and every sidebar module must be in; so must the
+# files a user opening the package expects. A package missing one loads as a
+# blank sidebar or a dead entry point, with no error anywhere.
+for f in Info.json main.js overlay.html sidebar.html README.md LICENSE; do
   printf '%s\n' "$LISTING" | grep -q "[[:space:]]$f\$" || {
     echo "error: package is missing $f" >&2; exit 1; }
 done

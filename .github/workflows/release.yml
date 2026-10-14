@@ -72,9 +72,9 @@ jobs:
             printf '%s\n' "$listing" | grep -q "[[:space:]]$rel\$" || {
               echo "error: package is missing $rel" >&2; exit 1; }
           done
-          if printf '%s\n' "$listing" | grep -Eq '\.env|\.git/|todo/|tests/|NOTES\.md|AGENTS\.md'; then
+          if printf '%s\n' "$listing" | grep -Eq '\.env|\.git/|todo/|tests/|NOTES\.md|AGENTS\.md|\.DS_Store'; then
             echo "error: package contains local-only files:" >&2
-            printf '%s\n' "$listing" | grep -E '\.env|\.git/|todo/|tests/|NOTES\.md|AGENTS\.md' >&2
+            printf '%s\n' "$listing" | grep -E '\.env|\.git/|todo/|tests/|NOTES\.md|AGENTS\.md|\.DS_Store' >&2
             exit 1
           fi
           echo "packed $(basename "$artifact")"

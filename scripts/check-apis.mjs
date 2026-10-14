@@ -46,7 +46,7 @@ function loadDotEnv() {
 const INFO = JSON.parse(readFileSync(join(ROOT, "Info.json"), "utf8"));
 
 // Identifies this script to the APIs it probes.
-const UA = `EpisodeInfo v${INFO.version}`;
+const UA = `Sidekick v${INFO.version}`;
 const TIMEOUT_MS = 20000;
 const RETRIES = 3;
 // Upstream hiccups that say nothing about the plugin being broken.

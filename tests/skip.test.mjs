@@ -448,10 +448,17 @@ test("file-loaded clears the state even when loading the sidebar throws", () => 
   // false the way a launch before the handshake does.
   m.setWindowLoaded(false);
   m.global.sidebarLoaded = false;
+  // A different file, so a capture that never ran is distinguishable from one
+  // that captured the previous URL.
+  m.global.iina.core.status.url = "file:///v/b.mkv";
 
   assert.throws(() => m.emit("iina.file-loaded"), /player window not loaded/);
   assert.equal(m.global.currentEpisode, null, "the previous episode survived");
   assert.equal(m.global.segments.length, 0, "the previous segments survived");
+  // The capture and both messages ran before the throw, so the sidebarReady
+  // handshake has a URL to re-send and this file can still be identified.
+  assert.equal(m.global.currentVideoUrl, "file:///v/b.mkv",
+    "the throw skipped the URL capture, leaving the handshake nothing to send");
 });
 
 test("clearing the selection also stops the time observer", () => {

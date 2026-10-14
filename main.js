@@ -514,7 +514,7 @@ async function resolveSegments(info, forceRefresh) {
     // "Searching…" for the rest of the session. The stale report is what
     // re-enables it; an abandoned run does the same thing for the same reason.
     log("skip lookup failed: " + errStr(e));
-    try { reportSkip(info, [], true); } catch (e2) {}
+    try { reportSkip([], true); } catch (e2) {}
   }
 }
 
@@ -527,7 +527,7 @@ async function resolveSegmentsInner(info, forceRefresh) {
   function report(list, stale) {
     if (reported) return;
     reported = true;
-    reportSkip(info, list, stale);
+    reportSkip(list, stale);
   }
   // Stale, not empty. The sidebar clears its "Searching…" button on this
   // message, and also prints what it is told; a superseded run reporting "no
@@ -701,7 +701,7 @@ function rememberSegments(key, list) {
   }
 }
 
-function reportSkip(info, list, stale) {
+function reportSkip(list, stale) {
   sidebar.postMessage("skipResult", {
     count: list.length,
     label: list.length ? describeSegments(list) : "",
@@ -760,7 +760,11 @@ function seekAbsolute(target) {
     return "core.seekTo";
   } catch(e1) {
     try {
-      iina.mpv.command("seek", [String(target), "absolute", "exact"]);
+      // One flags argument, "absolute+exact": passing them as two arguments
+      // (mpv's old spelling is a single flag word) made the command invalid,
+      // and mpv.command reports no failure, so this path claimed success
+      // without moving the playhead.
+      iina.mpv.command("seek", [String(target), "absolute+exact"]);
       return "mpv seek absolute";
     } catch(e2) {
       try {
@@ -779,25 +783,21 @@ function skipNow(via) {
   if (!activeSegment) {
     return;
   }
-  // Validate before hiding anything. Clearing the pill first meant a target
-  // that could not be seeked left the user with no button and no reason.
-  var target = activeSegment.end;
+  // Validated and seeked before anything is hidden. Clearing the pill first
+  // meant a target that could not be seeked left the user with no button and
+  // no reason, and the guard the comment promised came after the hide.
   var kind   = activeSegment.kind;
-  if (!(target > 0)) {
-    iina.console.log("[EpInfo] refusing to seek to " + target + "s");
-    return;
-  }
-  hideSkip();
-
-  target = clampedSeekTarget(target);
+  var raw    = activeSegment.end;
+  var target = clampedSeekTarget(raw);
   // A segment that claims to end before it starts would seek backwards.
   if (!(target > 0)) {
-    iina.console.log("[EpInfo] refusing to seek to " + target + "s");
+    iina.console.log("[EpInfo] refusing to seek to " + raw + "s");
     return;
   }
 
   var how = seekAbsolute(target);
   if (how === null) return;
+  hideSkip();
 
   iina.console.log("[EpInfo] skipped " + kind + " to " + target + "s via " + how + " (" + via + ")");
 }
@@ -1401,11 +1401,17 @@ function reportScenes(list, flags, stale) {
 // message. 401 is DDD itself saying "bad key"; a Cloudflare challenge or a
 // timeout means the question was never asked, which is not the same verdict.
 function verifyDddKey() {
+  // The verdict belongs to the key that was checked. Without this a late 401
+  // for a key the user already replaced deleted the new, valid one: the
+  // sidebar drops the stored key on an "invalid" verdict.
+  var key = dddKey;
   dddGet("/topics").then(function(r) {
+    if (dddKey !== key) return;
     if (r.statusCode === 200) sidebar.postMessage("dddKeyCheck", { ok: true });
     else if (r.statusCode === 401) sidebar.postMessage("dddKeyCheck", { ok: false, reason: "invalid" });
     else sidebar.postMessage("dddKeyCheck", { ok: false, reason: "unverified" });
   }, function() {
+    if (dddKey !== key) return;
     sidebar.postMessage("dddKeyCheck", { ok: false, reason: "unverified" });
   });
 }
@@ -1524,23 +1530,17 @@ function undoScene() {
 // position can put up. There is no path here that could seek on a guess.
 function skipScene(via) {
   if (!activeScene) return;
-  // Validate before hiding anything, like skipNow: a target that cannot be
-  // seeked must leave the card up, not take it away with no reason.
-  var target = activeScene.safe;
+  // Validated and seeked before hiding the card, like skipNow.
   var label  = activeScene.label;
+  var raw    = activeScene.safe;
+  var target = clampedSeekTarget(raw);
   if (!(target > 0)) {
-    iina.console.log("[EpInfo] refusing to seek to " + target + "s for a scene cue");
-    return;
-  }
-  hideSceneCue();
-
-  target = clampedSeekTarget(target);
-  if (!(target > 0)) {
-    iina.console.log("[EpInfo] refusing to seek to " + target + "s for a scene cue");
+    iina.console.log("[EpInfo] refusing to seek to " + raw + "s for a scene cue");
     return;
   }
   var how = seekAbsolute(target);
   if (how === null) return;
+  hideSceneCue();
 
   iina.console.log("[EpInfo] skipped \"" + label + "\" to " + target + "s via " + how + " (" + via + ")");
 }
@@ -1698,11 +1698,40 @@ function subtitleEpisodeKey(info) {
   return String(info.tmdbId) + ":" + s + ":" + e;
 }
 
+// The key as a filename fragment. Only the separator is expected, but a
+// stored identification can carry anything: a "/" or ".." in a hand-edited
+// tmdbId must not become path structure.
+function subtitleKeySlug(k) {
+  return String(k).replace(/[^A-Za-z0-9_-]/g, "-");
+}
+
 function subtitleCachePath(info) {
   var k = subtitleEpisodeKey(info);
   // The write time is baked into the name: the file API exposes no
   // modification time, so this is what lets the cache be bounded later.
-  return k ? ("@data/sidekick-sub-" + k.replace(/:/g, "-") + "--" + Date.now() + ".srt") : "";
+  return k ? ("@data/sidekick-sub-" + subtitleKeySlug(k) + "--" + Date.now() + ".srt") : "";
+}
+
+// The name of a file from iina.file.list, whatever the entry calls it. The
+// field this code originally read is not what a real install returns: entries
+// came back carrying neither "filename" nor a usable "path", so every delete
+// and every prune matched nothing and each scan appended another copy
+// (verified against the plugin's own data directory).
+function dataFileName(f) {
+  if (!f) return "";
+  if (f.filename) return String(f.filename);
+  if (f.name) return String(f.name);
+  return String(f.path || "").split("/").pop();
+}
+
+// The app's list method declares an options argument; passing it costs nothing
+// and not passing it may be why entries arrive bare. The one-argument form
+// stays as the fallback for builds that only take one.
+function listDataFiles() {
+  try { return iina.file.list("@data", {}) || []; }
+  catch (e) {
+    try { return iina.file.list("@data") || []; } catch (e2) { return []; }
+  }
 }
 
 // The cached copy for this episode, newest-epoch file winning, with the
@@ -1711,16 +1740,25 @@ function subtitleCachePath(info) {
 function cachedSubtitlePath(info) {
   var k = subtitleEpisodeKey(info);
   if (!k) return "";
-  var prefix = "sidekick-sub-" + k.replace(/:/g, "-") + "--";
+  var prefix = "sidekick-sub-" + subtitleKeySlug(k) + "--";
   try {
     if (typeof iina.file.list === "function") {
-      var files = iina.file.list("@data") || [];
+      // Newest, not first: the comment above promised this and the loop did
+      // not do it, so which copy was loaded depended on list order.
+      var files = listDataFiles(), best = "", bestTs = -1;
       for (var i = 0; i < files.length; i++) {
-        var name = (files[i] && files[i].filename) || "";
-        if (name.indexOf(prefix) === 0) return files[i].path || ("@data/" + name);
+        var name = dataFileName(files[i]);
+        if (name.indexOf(prefix) !== 0) continue;
+        var m = /--(\d+)\.srt$/.exec(name);
+        var ts = m ? Number(m[1]) : 0;
+        if (ts > bestTs) { bestTs = ts; best = name; }
       }
+      // "@data/<name>" is the form iina.file.write itself accepts, so the
+      // write location is known to resolve here; a relative path from the API
+      // is not.
+      if (best) return "@data/" + best;
     }
-    var legacy = "@data/sidekick-sub-" + k.replace(/:/g, "-") + ".srt";
+    var legacy = "@data/sidekick-sub-" + subtitleKeySlug(k) + ".srt";
     if (typeof iina.file.exists === "function" && iina.file.exists(legacy)) return legacy;
   } catch (e) {}
   return "";
@@ -1730,18 +1768,17 @@ function rememberSubtitle(info, text) {
   if (!text || typeof text !== "string") return;
   var k = subtitleEpisodeKey(info);
   if (!k) return;
-  var prefix = "sidekick-sub-" + k.replace(/:/g, "-") + "--";
+  var prefix = "sidekick-sub-" + subtitleKeySlug(k) + "--";
   try {
     if (typeof iina.file.write !== "function") return;
     // One cached copy per episode: an earlier one for the same key goes
     // before the new one is written.
     if (typeof iina.file.list === "function" && typeof iina.file.delete === "function") {
-      var files = [];
-      try { files = iina.file.list("@data") || []; } catch (e) { files = []; }
+      var files = listDataFiles();
       files.forEach(function(f) {
-        var name = (f && f.filename) || "";
+        var name = dataFileName(f);
         if (name.indexOf(prefix) === 0) {
-          try { iina.file.delete(f.path || ("@data/" + name)); } catch (e) {}
+          try { iina.file.delete("@data/" + name); } catch (e) {}
         }
       });
     }
@@ -1756,9 +1793,11 @@ var SUB_CACHE_MAX = 120;
 function subtitleFilesToPrune(files, cap) {
   var mine = [];
   (Array.isArray(files) ? files : []).forEach(function(f) {
-    var name = (f && (f.filename || f.path)) || "";
+    var name = dataFileName(f);
     var m = /^sidekick-sub-(.+?)--(\d+)\.srt$/.exec(name);
-    if (m) mine.push({ path: (f.path || name), ts: Number(m[2]) });
+    // Deleted by the "@data/<name>" form the writer uses, not by whatever the
+    // listing called the path.
+    if (m) mine.push({ path: "@data/" + name, ts: Number(m[2]) });
   });
   if (mine.length <= cap) return [];
   mine.sort(function(a, b) { return b.ts - a.ts; });
@@ -1768,8 +1807,7 @@ function subtitleFilesToPrune(files, cap) {
 function pruneSubtitleCache() {
   try {
     if (!iina.file || typeof iina.file.list !== "function" || typeof iina.file.delete !== "function") return;
-    var files = [];
-    try { files = iina.file.list("@data") || []; } catch (e) { return; }
+    var files = listDataFiles();
     subtitleFilesToPrune(files, SUB_CACHE_MAX).forEach(function(p) {
       try { iina.file.delete(p); } catch (e) {}
     });
@@ -1885,10 +1923,16 @@ function tryLoadCachedSubtitle() {
     if (hasExternal) return;   // the user's own choice stays untouched
     if (typeof core.subtitle.loadTrack !== "function") return;
     var before = tracks.length;
+    // Tied to the episode it was started for: a file change inside the 2.5s
+    // window used to post autoload-failed for whatever episode was playing by
+    // then, and the sidebar offers a manual load over a subtitle that may be
+    // loading fine.
+    var key = subtitleEpisodeKey(currentEpisode);
     core.subtitle.loadTrack(p);
     log("loading cached subtitle " + p);
     setTimeout(function() {
       try {
+        if (!currentEpisode || subtitleEpisodeKey(currentEpisode) !== key) return;
         var now = [];
         try { now = core.subtitle.tracks || []; } catch (e) {}
         var ext = false;
@@ -2034,7 +2078,10 @@ function registerSidebarHandlers() {
   // "Search again" in the sidebar: ignore the cache and look once more.
   sidebar.onMessage("refreshSkip", function() {
     if (!skipEnabled || !currentEpisode) {
-      sidebar.postMessage("skipResult", { count: 0, label: "" });
+      // Refused, not answered. A real answer with no segments would make the
+      // sidebar print "Nothing found for this episode" for a feature that is
+      // switched off, which is a statement about the data it cannot make.
+      sidebar.postMessage("skipResult", { count: 0, label: "", stale: true });
       return;
     }
     resolveSegments(currentEpisode, true);
@@ -2043,7 +2090,7 @@ function registerSidebarHandlers() {
   // The scene warnings' own "Search again": same shape, its own feature.
   sidebar.onMessage("refreshScenes", function() {
     if (!dddEnabled || !dddKey || !currentEpisode) {
-      reportScenes([], [], false);
+      reportScenes([], [], true);   // refused, not "nothing found"
       return;
     }
     resolveScenes(currentEpisode, true);
@@ -2262,11 +2309,14 @@ event.on("iina.file-loaded", function() {
   // the next answer they named the previous episode: clearEpisode has always
   // done the same, and this path did not.
   clearMediaTitle();
-  setupSidebar();
-  // Capture URL so sidebar can look it up in its URL→episode map
+  // Captured before setupSidebar, which throws when the player window is not
+  // loaded yet — the first file after launch. The throw used to skip the
+  // capture and both messages below, and the sidebarReady handshake has
+  // nothing to re-send without a URL, so that file was never identified.
   try { currentVideoUrl = core.status.url || ""; } catch(e) { currentVideoUrl = ""; }
   sidebar.postMessage("fileChanged", { url: currentVideoUrl });
   sidebar.postMessage("overlayStatus", { text: "Select an episode, then pause" });
+  setupSidebar();
 });
 
 // Show the card if the video is sitting paused. Identification finishes
