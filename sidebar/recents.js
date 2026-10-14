@@ -173,6 +173,12 @@ function renderRecents() {
   var html = "";
   for (var i = 0; i < items.length; i++) {
     var info = items[i].info || {};
+    // A film record carries "Movie" in the show slot on purpose: it is the
+    // eyebrow the saved card and the overlay label a film with, and the film's
+    // own name lives in epTitle. Preferring showTitle here made the card's
+    // headline "Movie", with the film's name nowhere on it.
+    var head = info.isMovie ? (info.epTitle || info.showTitle)
+                            : (info.showTitle || info.epTitle);
     var sub  = info.isMovie
       ? "Movie" + (info.airDate ? " · " + htmlEsc(yearOf(info.airDate)) : "")
       : (info.code ? htmlEsc(info.code) : "") + (info.epTitle ? " · " + htmlEsc(info.epTitle) : "");
@@ -180,7 +186,7 @@ function renderRecents() {
     html += '<div class="rc" onclick="applyRecent(' + i + ')">' +
               '<div class="rc-img" style="' + img + '"></div>' +
               '<div class="rc-txt">' +
-                '<div class="rc-t">' + htmlEsc(info.showTitle || info.epTitle || "Untitled") + '</div>' +
+                '<div class="rc-t">' + htmlEsc(head || "Untitled") + '</div>' +
                 '<div class="rc-s">' + sub + '</div>' +
               '</div>' +
               '<button class="rc-b' + (items[i].pinned ? ' pinned' : '') + '" title="Pin" ' +

@@ -154,6 +154,33 @@ test("an identified episode lands in Recent Picks", async () => {
   assert.equal(list[0].info.showTitle, "Severance");
 });
 
+test("a film's card is titled with the film, not the 'Movie' label", () => {
+  // movieInfo() puts "Movie" in the show slot on purpose: it is the eyebrow
+  // the saved card and the overlay label a film with, and the film's own name
+  // lives in epTitle. The card preferred showTitle, so every film read
+  // "Movie" and its actual name appeared nowhere on it.
+  const h = boot();
+  h.global.saveSelection({
+    showTitle: "Movie", epTitle: "Fight Club", code: "", context: "",
+    airDate: "1999-10-15", rating: "", overview: "", posterUrl: "/fc.jpg", logoUrl: "",
+    tmdbId: "550", season: null, episode: null, isMovie: true
+  });
+  let html = h.document.getElementById("recents-list").innerHTML;
+  assert.match(html, /class="rc-t">Fight Club</, "the card headline is not the film");
+  assert.match(html, /class="rc-s">Movie · 1999</, "the label and year moved");
+
+  // The series card is unchanged: the show is the heading and the code plus
+  // episode name its sub.
+  h.global.saveSelection({
+    showTitle: "Severance", epTitle: "Half Loop", code: "S01E02", context: "",
+    airDate: "2022-02-25", rating: "", overview: "", posterUrl: "", logoUrl: "",
+    tmdbId: "1399", season: 1, episode: 2, isMovie: false
+  });
+  html = h.document.getElementById("recents-list").innerHTML;
+  assert.match(html, /class="rc-t">Severance</);
+  assert.match(html, /class="rc-s">S01E02 · Half Loop</);
+});
+
 test("Recent Picks is capped, oldest unpinned entries dropped", async () => {
   const h = boot();
   for (let i = 1; i <= 8; i++) {
