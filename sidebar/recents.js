@@ -6,7 +6,10 @@ var SEARCHES_CAP = 5;
 function loadSearches() {
   try {
     var v = JSON.parse(localStorage.getItem("epinfo_searches") || "[]");
-    return Array.isArray(v) ? v : [];
+    // Capped on read as well as on write: the list is rendered as chips, and a
+    // value saved under an older, larger limit would keep rendering every
+    // entry. sortedRecents does the same for its own list.
+    return Array.isArray(v) ? v.slice(0, SEARCHES_CAP) : [];
   } catch(e) { return []; }
 }
 function pushSearch(q) {

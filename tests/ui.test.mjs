@@ -355,3 +355,46 @@ test("the saved card marks a series rating as the series'", () => {
   h.global.showSaved({ showTitle: "Severance", epTitle: "Half Loop", rating: "9.1" });
   assert.doesNotMatch(h.document.getElementById("s-meta").innerHTML, /rat-note/);
 });
+
+// ── Audit round: storage hardening and escaping ─────────────────────
+
+test("more stored searches than the cap still render only the cap", () => {
+  // The cap was enforced on write only, so a list saved under an older,
+  // larger limit kept rendering every entry (the recents list already capped
+  // on read for the same reason).
+  const h = boot({ epinfo_searches: JSON.stringify(["a","b","c","d","e","f","g"]) });
+  h.global.renderSearches();
+  const chips = h.document.getElementById("searches-list").innerHTML.match(/class="sq"/g) || [];
+  assert.equal(chips.length, 5, "the stored list was rendered in full");
+});
+
+test("a full origin does not break the overlay toggle", () => {
+  const h = boot();
+  const posted = [];
+  h.localStorage.setItem = () => { throw new Error("QuotaExceededError"); };
+  h.iina.postMessage = (name, payload) => posted.push([name, payload]);
+  assert.doesNotThrow(() => h.global.doToggleOverlay(false));
+  assert.equal(posted.filter(([n]) => n === "setOverlayEnabled").length, 1,
+    "the throw landed before the visual state and the message: the switch did nothing");
+});
+
+test("a full origin does not lose a key that could not be verified", async () => {
+  const h = loadSidebar({ storage: KEY, routes: { "/3/configuration": new Error("offline") } });
+  h.document.getElementById("api-input").value = "KEY123";
+  h.localStorage.setItem = () => { throw new Error("QuotaExceededError"); };
+  assert.doesNotThrow(() => h.global.doSaveKey());
+  await settle();
+  assert.equal(h.global.TK, "KEY123", "the session key was not set");
+  assert.match(h.document.getElementById("api-msg").textContent, /Saved/);
+});
+
+test("a poster path cannot break out of its attribute", async () => {
+  const h = loadSidebar({ storage: KEY, routes: { "/3/search/multi": { results: [
+    { id: 9, media_type: "tv", name: "Show", poster_path: '/p.jpg" onerror="boom' } ] } } });
+  h.document.getElementById("q").value = "anything";
+  h.global.doSearch();
+  await settle();
+  const html = h.document.getElementById("panel").innerHTML;
+  assert.ok(!html.includes('onerror="boom'), "the poster path broke out of the attribute");
+  assert.match(html, /&quot; onerror=&quot;boom/);
+});

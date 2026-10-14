@@ -740,3 +740,80 @@ test("a remembered episode that still agrees with the absolute number is kept", 
   assert.equal(app.fetchCalls.length, before, "a still-correct entry was re-fetched");
   assert.equal(selected(app).code, "S21E62");
 });
+
+// ── Numbers that belong to the title ────────────────────────────────
+
+test("a number that is part of the title survives the trailing passes", () => {
+  // The trailing-junk pass dropped any 1–3 digit token that followed a real
+  // word, so "Station 19" became "Station", "Room 104" became "Room" and
+  // "Spider-Man 3" became "Spider-Man" — the last one identifying a different
+  // film, because the 2002 original matched the year instead.
+  const cases = [
+    ["Station.19.S01E01.1080p.WEB-DL.mkv", "Station 19", "S1E1"],
+    ["Room.104.S01E01.mkv", "Room 104", "S1E1"],
+    ["Catch-22.S01E01.mkv", "Catch-22", "S1E1"]
+  ];
+  for (const [file, want, code] of cases) {
+    const p = parse(at("", file));
+    assert.equal(p.title, want, file);
+    assert.equal("S" + p.code.season + "E" + p.code.episode, code, file);
+  }
+  // A film keeps its number and its year, which is what tells the sequels
+  // apart: "Spider-Man.3.2002" used to be looked up as the 2002 Spider-Man.
+  for (const [file, want, year] of [
+    ["Spider-Man.3.2002.1080p.mkv", "Spider-Man 3", 2002],
+    ["Apollo.13.1995.mkv", "Apollo 13", 1995],
+    ["Room.104.2019.mkv", "Room 104", 2019]
+  ]) {
+    const p = parse(at("", file));
+    assert.equal(p.title, want, file);
+    assert.equal(p.year, year, file);
+    assert.equal(p.isMovie, true, file);
+  }
+  // Numbers that were already handled keep working.
+  for (const [file, want] of [
+    ["The.100.S01E01.mkv", "The 100"],
+    ["9-1-1.S01E01.mkv", "9-1-1"],
+    ["Hawaii.Five-0.2010.mkv", "Hawaii Five-0"],
+    ["1917.2019.1080p.mkv", "1917"]
+  ]) {
+    assert.equal(parse(at("", file)).title, want, file);
+  }
+});
+
+test("a leftover number still comes off", () => {
+  // The other half: padded counters and digits hanging off a removed tag are
+  // not titles, and keeping them would search for them.
+  assert.equal(cleanTitle("Severance WEB- 1", null), "Severance");
+  assert.equal(cleanTitle("Whatever 04", null), "Whatever");
+  const p = parse(at("", "[One Pace][1062-1063] Egghead 12 [1080p][En Sub][FD5592BE].mp4"));
+  assert.equal(p.title, "Egghead", "the fansub counter was kept");
+  assert.equal(p.absolute, 1062);
+});
+
+test("the E-marker goes with the absolute number it was promoted from", () => {
+  // "Show E1062" was promoted to an absolute number, but the code-removal
+  // path no longer ran (code was null by then), so the search was "Show E".
+  const p = parse(at("", "[AnimePahe] Show E1062 1080p.mkv"));
+  assert.equal(p.title, "Show");
+  assert.equal(p.absolute, 1062);
+});
+
+test("an underscore-joined codec chain is removed with its tag", () => {
+  // "\b" cannot match between "_" and "DDP5_1", so this rule never fired on
+  // the names it was written for; the "1" it left behind was dropped later by
+  // the trailing pass, which no longer drops bare numbers.
+  assert.equal(parse(at("", "Show_Name_S02E05_1080p_DDP5_1_atmos_H264-GROUP.mkv")).title,
+    "Show Name");
+  assert.equal(parse(at("", "Some.Show.05.DDP5_1.x264.mkv")).code.episode, 5,
+    "the episode number the codec tag was hiding");
+});
+
+test("S01E00 is an episode, not a parse failure", () => {
+  // "!r.episode" also rejected zero, so the raw code stayed in the title and
+  // the file was handed to the manual search instead.
+  const p = parse(at("", "Show.S01E00.mkv"));
+  assert.equal(p.title, "Show");
+  assert.equal(p.code.season, 1);
+  assert.equal(p.code.episode, 0);
+});

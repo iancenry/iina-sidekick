@@ -75,9 +75,6 @@ function clearCurrentUrlFromMap() {
   }
 }
 
-// ── File changed ──────────────────────────────────────────────
-// fileChanged handled below
-
 function resetPanel() {
   document.getElementById("panel").innerHTML =
     '<div class="msg">Search above to find a show or movie.</div>';

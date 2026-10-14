@@ -17,7 +17,10 @@ function updateToggleVisual(enabled) {
 }
 
 function doToggleOverlay(enabled) {
-  localStorage.setItem("epinfo_overlay_enabled", enabled ? "true" : "false");
+  // Guarded like every other settings write: a full origin makes setItem
+  // throw, and the throw used to land before the visual state and the
+  // message, so the switch silently did nothing.
+  try { localStorage.setItem("epinfo_overlay_enabled", enabled ? "true" : "false"); } catch (e) {}
   updateToggleVisual(enabled);
   iina.postMessage("setOverlayEnabled", { enabled: enabled });
 }
@@ -68,7 +71,7 @@ function doSaveKey() {
     .then(function(r){ return r.json(); })
     .then(function(d){
       if (d.images) {
-        localStorage.setItem("epinfo_tmdb_key", key);
+        try { localStorage.setItem("epinfo_tmdb_key", key); } catch (e) {}
         iina.postMessage("setTmdbKey", { key: key });
         TK = key;
         msg.style.color="#30d158"; msg.textContent="✓ Valid key saved!";
@@ -78,7 +81,9 @@ function doSaveKey() {
       }
     })
     .catch(function(){
-      localStorage.setItem("epinfo_tmdb_key", key);
+      // A failed write must not lose the key for this session: the throw used
+      // to become an unhandled rejection here, so the form never said Saved.
+      try { localStorage.setItem("epinfo_tmdb_key", key); } catch (e) {}
       iina.postMessage("setTmdbKey", { key: key });
       TK = key;
       msg.style.color="#ff9f0a"; msg.textContent="⚠ Saved (couldn’t verify: no network)";

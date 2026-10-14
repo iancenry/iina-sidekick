@@ -73,13 +73,20 @@ iina.onMessage("fileChanged", function(d){
     iina.postMessage("setSceneMarks", { marks: marksFor(saved) });
     iina.postMessage("episodeSelected", saved);
     if (typeof paintMarks === "function") paintMarks();
-  } else if (!autoIdentify(currentVideoUrl)) {
-    // Nothing usable in the filename, so fall back to a manual prompt.
+  } else {
+    // The new file's identity is not known yet, so the previous one must not
+    // stay live while the lookup runs. It used to, deliberately, so the card
+    // would not blink; but the marks capture reads epinfo_ep, and a mark added
+    // during that window (up to the 25s deadline) was stored against the
+    // previous episode, with the previous card on screen over a file it did
+    // not describe. autoIdentify repaints both the moment it lands.
     try { localStorage.removeItem("epinfo_ep"); } catch(e) {}
     document.getElementById("saved").classList.remove("on");
     iina.postMessage("setSceneMarks", { marks: [] });
     iina.postMessage("clearEpisode", {});
     if (typeof paintMarks === "function") paintMarks();
+    // False means the filename holds nothing to search by, and the manual
+    // prompt above is the whole outcome.
+    autoIdentify(currentVideoUrl);
   }
-  // else: autoIdentify is running and will replace the stale entry.
 });

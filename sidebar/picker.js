@@ -5,12 +5,19 @@ function pickItemByIndex(i) {
   pickItem(cache[i]);
 }
 
+// Which pick is current. A show's detail request can outlive the pick that
+// started it, and its response lands on whatever selShow is by then: a pick
+// made while an earlier one was still loading painted one show's name and
+// seasons onto the other's id.
+var pickSeq = 0;
+
 function pickItem(item) {
   selShow   = item;
   selSeason = null;
   episodeCache = [];
   showLogoUrl = "";
   showTotals = null;
+  var seq = ++pickSeq;
 
   if (item.media_type === "movie") {
     document.getElementById("panel").innerHTML =
@@ -18,6 +25,7 @@ function pickItem(item) {
     fetch("https://api.themoviedb.org/3/movie/"+item.id+"?api_key="+TK+"&append_to_response=images")
       .then(function(r){return r.json();})
       .then(function(d){
+        if (seq !== pickSeq) return;   // a newer pick owns the panel now
         if (!d || !d.title) {
           document.getElementById("panel").innerHTML = '<div class="msg">Failed to load.</div>';
           return;
@@ -26,6 +34,7 @@ function pickItem(item) {
         saveSelection(info);
         rememberFolderPin(info);   // a no-op for films, by design
       }).catch(function(){
+        if (seq !== pickSeq) return;
         document.getElementById("panel").innerHTML='<div class="msg">Failed to load.</div>';
       });
     return;
@@ -36,6 +45,7 @@ function pickItem(item) {
   fetch("https://api.themoviedb.org/3/tv/"+item.id+"?api_key="+TK+"&append_to_response=images")
     .then(function(r){return r.json();})
     .then(function(show){
+      if (seq !== pickSeq) return;   // a newer pick owns the panel now
       // The same dead end applyShowDetail guards against: an error body has no
       // seasons, which rendered a "Season" heading over zero pills.
       if (!show || !show.seasons) {
@@ -53,6 +63,7 @@ function pickItem(item) {
       };
       renderSeasons();
     }).catch(function(){
+      if (seq !== pickSeq) return;
       document.getElementById("panel").innerHTML='<div class="msg">Failed to load seasons.</div>';
     });
 }
@@ -62,8 +73,8 @@ function renderSeasons() {
   var pills = "";
   selShow._seasons.forEach(function(s){
     pills += '<button class="pill'+(selSeason===s.season_number?" on":"")+
-      '" onclick="pickSeason('+s.season_number+')">S'+
-      String(s.season_number).padStart(2,"0")+'</button>';
+      '" onclick="pickSeason('+htmlEsc(String(s.season_number))+')">S'+
+      htmlEsc(String(s.season_number).padStart(2,"0"))+'</button>';
   });
   document.getElementById("panel").innerHTML =
     '<div class="sec"><div class="sl">Season</div><div class="pills">'+pills+'</div></div>' +
@@ -103,10 +114,13 @@ function renderEps(sNum, autoEp, token) {
 
       var pills = "";
       episodeCache.forEach(function(ep, i){
+        // The number is escaped too, though it is a number: this is the only
+        // dynamic value besides the tooltip that reaches the markup, and a
+        // hand-edited stored entry is not the only possible source.
         var label = "E" + String(ep.episode_number).padStart(2,"0");
         // Use htmlEsc for tooltip; no data at all in onclick
         pills += '<button class="pill" title="'+htmlEsc(ep.name||"")+
-          '" onclick="pickEp('+i+')">'+label+'</button>';
+          '" onclick="pickEp('+i+')">'+htmlEsc(label)+'</button>';
       });
       el.innerHTML =
         '<div class="sec" style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.07)">' +

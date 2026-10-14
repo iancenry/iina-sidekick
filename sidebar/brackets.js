@@ -111,6 +111,11 @@ function absoluteFromBrackets(base) {
 var currentParsed = null;
 
 function parseFilename(url) {
+  // Cleared before every attempt, not only on success: the pin writer reads
+  // titleDir from here, and a file that fails to parse left the previous
+  // file's directory standing, so a manual pick on it pinned the folder of
+  // whatever was parsed last.
+  currentParsed = null;
   var fname = fileNameFromUrl(url);
   if (!fname) return null;
   var base = fname.replace(/\.[a-z0-9]{2,4}$/i, "");
@@ -192,7 +197,12 @@ function parseFilename(url) {
     // is a word character, so it cannot match between that digit and the
     // underscore in "_1_atmos", which left this rule matching nothing at all
     // and the episode number being read out of the spec instead.
-    .replace(/\b(?:DD|DD[P5]?|DTS(?:[-_]HD)?|E?AC-?3|AAC|TRUEHD|FLAC|OPUS|ATMOS)[0-9]?(?:[._-][A-Za-z0-9]{1,3})*[._-][0-9](?![0-9A-Za-z])/gi, " ")
+    //
+    // The lead is spelled as a boundary too: "\b" cannot match between the
+    // underscore and the "D" of "…_DDP5_1_atmos", so the rule never fired on
+    // the underscore-joined names it exists for, and the "1" it should have
+    // taken with the tag was left in the title as a bare number.
+    .replace(/(?:^|[^A-Za-z0-9])(?:DD|DD[P5]?|DTS(?:[-_]HD)?|E?AC-?3|AAC|TRUEHD|FLAC|OPUS|ATMOS)[0-9]?(?:[._-][A-Za-z0-9]{1,3})*[._-][0-9](?![0-9A-Za-z])/gi, " ")
     .replace(/\b[0-9](?:\.[A-Za-z0-9]{1,3})*\.[0-9](?![0-9])\b/g, " ")  // a bare "5.1"
     .replace(/\bH\.[0-9]{3}\b/gi, " ")
     .replace(/\bX26[45]\b/gi, " ")
@@ -259,7 +269,13 @@ function parseFilename(url) {
   // title unless it is taken off here. "One Piece 1062" searched for itself
   // before the ladder got to "One Piece".
   if (absolute !== null) {
-    title = title.replace(new RegExp("[\\s.-]*" + absolute + "v?\\d*$"), " ").trim();
+    // The fansub's own counter trails the episode name and is not the absolute
+    // number ("Egghead 04" on an episode marked [1062-1063]): with the bracket
+    // number in hand the counter names nothing, and it was being searched for.
+    title = title.replace(/[\s._-]+v?\d{1,3}$/, " ");
+    // The E is optional because the E-marker form ("Show E1062") is what put
+    // the number here in the promotion path.
+    title = title.replace(new RegExp("[\\s.-]*E?[\\s.-]*" + absolute + "v?\\d*$"), " ").trim();
   }
 
   // Set only when the directory supplied the title. A title the filename gave

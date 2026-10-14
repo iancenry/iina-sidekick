@@ -378,3 +378,92 @@ test("a manual search wins over a lookup still in flight", async () => {
     "the in-flight lookup replaced the user's search results");
   assert.doesNotMatch(h.document.getElementById("panel").innerHTML, /Severance/);
 });
+
+// ── The deadline is a verdict, not a pause ─────────────────────────
+
+test("an answer that lands after the give-up deadline commits nothing", async () => {
+  // giveUp() showed the search prompt but did not invalidate the lookup, so
+  // the parked response still passed live(): the panel said "Couldn't match"
+  // and then became "Saved", and the query box was overwritten.
+  let release;
+  const h = loadSidebar({
+    storage: KEY,
+    routes: {
+      "/3/search/tv": () => new Promise((res) => { release = res; }),
+      "/3/tv/1399/season/1": SEASON_1,
+      "/3/tv/1399": SHOW
+    }
+  });
+  const url = "file:///v/Severance S01E02.mkv";
+  h.iina._emit("fileChanged", { url });
+  h.timers._fireAll();                       // the deadline fires first
+  await settle();
+  assert.match(h.document.getElementById("panel").innerHTML, /Couldn't match/);
+
+  release({ results: [{ id: 1399, name: "Severance", vote_count: 4000 }] });
+  await settle();
+  assert.match(h.document.getElementById("panel").innerHTML, /Couldn't match/,
+    "a late answer replaced the search prompt");
+  assert.equal(picks(h).length, 0, "a late answer still committed a selection");
+  assert.equal(h.document.getElementById("q").value, "", "the query box was overwritten");
+});
+
+test("a show response that lands late does not overwrite the newer pick", async () => {
+  // Two picks in quick succession: the first show's detail response arrived
+  // after the second was chosen and wrote its name and seasons onto the
+  // second one's id, so the pills belonged to one show and the id to another.
+  const pending = {};
+  const h = loadSidebar({
+    storage: KEY,
+    routes: {
+      "/3/search/tv": { results: [] },
+      "/3/tv/111": () => new Promise((res) => { pending[111] = res; }),
+      "/3/tv/222": () => new Promise((res) => { pending[222] = res; })
+    }
+  });
+  h.global.pickItem({ id: 111, media_type: "tv", name: "Show A" });
+  h.global.pickItem({ id: 222, media_type: "tv", name: "Show B" });
+
+  pending[222]({ id: 222, name: "Show B", seasons: [{ season_number: 1 }], vote_average: 6, images: {} });
+  await settle();
+  pending[111]({ id: 111, name: "Show A", seasons: [{ season_number: 9 }], vote_average: 5, images: {} });
+  await settle();
+
+  assert.equal(h.global.selShow.id, 222, "the panel switched to the older pick");
+  assert.equal(h.global.selShow._name, "Show B", "the late response renamed the selection");
+  assert.deepEqual(Array.from(h.global.selShow._seasons, (s) => s.season_number), [1],
+    "the late response replaced the seasons");
+  assert.doesNotMatch(h.document.getElementById("panel").innerHTML, />S09</,
+    "the older show's pills were rendered for the newer pick");
+});
+
+test("the previous identification does not stay live while the next lookup runs", async () => {
+  // epinfo_ep, the saved card and the marks target kept the previous file's
+  // entry until the new lookup landed — up to the 25s deadline — so a mark
+  // captured in that window was stored against the previous episode, and the
+  // previous card sat over a file it did not describe.
+  const showA = { id: 42, name: "Show A", seasons: [{ season_number: 1, episode_count: 2 }],
+                  images: {}, vote_average: 5 };
+  const h = loadSidebar({
+    storage: KEY,
+    routes: {
+      "/3/search/tv": (url) => decodeURIComponent(url).includes("query=Show B")
+        ? new Promise(() => {})                     // B's lookup never lands
+        : { results: [{ id: 42, name: "Show A", vote_count: 10 }] },
+      "/3/tv/42/season/1": { poster_path: "", episodes: [{ episode_number: 1, name: "Pilot", air_date: "2020-01-01" }] },
+      "/3/tv/42": showA
+    }
+  });
+  h.iina._emit("fileChanged", { url: "file:///v/Show A S01E01.mkv" });
+  await settle();
+  assert.equal(JSON.parse(h.localStorage.getItem("epinfo_ep")).showTitle, "Show A",
+    "the fixture did not identify");
+
+  h.iina._emit("fileChanged", { url: "file:///v/Show B S02E01.mkv" });
+  await settle(5);
+  assert.equal(h.localStorage.getItem("epinfo_ep"), null,
+    "the previous entry stayed live while the new lookup ran");
+  assert.equal(h.global.currentMarkInfo(), null, "a mark would attach to the previous episode");
+  assert.equal(h.document.getElementById("saved").classList.contains("on"), false,
+    "the previous card stayed up over the new file");
+});

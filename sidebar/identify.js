@@ -188,6 +188,10 @@ var alt = parsed.altTitles || { strong: [], weak: [] };
     if (!live()) { clearClaim(); return; }
     clearClaim();
     autoCancelTimer();
+    // The deadline is a verdict, not a pause. Without this the parked request
+    // still passed live() when it landed and committed an identification the
+    // panel had already told the user to search for by hand.
+    invalidateLookups();
     // Rows only when there are rows. A lookup that failed for a reason no
     // result can fix (a rate limit, a dead key) has nothing to offer, and a
     // list there would be a different kind of lie.
@@ -215,8 +219,10 @@ var alt = parsed.altTitles || { strong: [], weak: [] };
     // A question TMDB already answered with nothing in this session is not
     // worth a second round trip: the release-group suffix repeats on every
     // file of a batch, so episode 2 goes straight to the shorter prefix.
-    if (searchMissed(candidates[i])) { attempt(i + 1); return; }
+    // Scoped to the endpoint that answered: a series miss must not skip the
+    // film search for the same name.
     var endpoint = parsed.isMovie ? "search/movie" : "search/tv";
+    if (searchMissed(endpoint, candidates[i])) { attempt(i + 1); return; }
     var q = encodeURIComponent(candidates[i]);
     fetch("https://api.themoviedb.org/3/" + endpoint + "?api_key=" + TK + "&query=" + q)
       .then(function(r) { return r.json(); })
@@ -228,7 +234,7 @@ var alt = parsed.altTitles || { strong: [], weak: [] };
 
 if (parsed.isMovie) {
             list = (data.results || []).filter(function(x) { return x.title; });
-            if (!list.length) { noteSearchMiss(candidates[i]); return attempt(i + 1); }
+            if (!list.length) { noteSearchMiss(endpoint, candidates[i]); return attempt(i + 1); }
             if (!suggestions.length) suggestions = tagResults(list, "movie");
             // A matching release year is a far stronger signal than votes, because
             // remakes share titles, so "Footloose 1984" must not pick 2011. The name
@@ -253,7 +259,7 @@ if (parsed.isMovie) {
           } else {
           list = (data.results || [])
             .filter(function(x) { return x.media_type !== "movie" && x.name; });
-          if (!list.length) { noteSearchMiss(candidates[i]); return attempt(i + 1); }
+          if (!list.length) { noteSearchMiss(endpoint, candidates[i]); return attempt(i + 1); }
           if (!suggestions.length) suggestions = tagResults(list, "tv");
           // Rank by how well each result's name matches the candidate it came
           // from, using votes only to break a tie between equally good names.
@@ -408,8 +414,8 @@ function applyShowDetail(show, code, absolute, token) {
   var pills = "";
   selShow._seasons.forEach(function(s) {
     pills += '<button class="pill' + (wanted === s.season_number ? " on" : "") +
-      '" onclick="pickSeason(' + s.season_number + ')">S' +
-      String(s.season_number).padStart(2, "0") + '</button>';
+      '" onclick="pickSeason(' + htmlEsc(String(s.season_number)) + ')">S' +
+      htmlEsc(String(s.season_number).padStart(2, "0")) + '</button>';
   });
   document.getElementById("panel").innerHTML =
     '<div class="sec"><div class="sl">Season</div><div class="pills">' + pills + '</div></div>' +

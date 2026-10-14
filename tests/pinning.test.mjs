@@ -269,3 +269,26 @@ test("a fresh pin survives the boot pass", () => {
   h.timers._fireAll();
   assert.equal(Object.keys(folderMap(h)).length, 1, "the boot pass dropped a live pin");
 });
+
+test("a manual pick on an unparseable file does not pin the last parsed folder", async () => {
+  // currentParsed was never cleared, so a parse that failed left the previous
+  // file's titleDir standing and the pin writer read it: picking a show by
+  // hand for "Episode 3.mkv" pinned the folder of whatever was parsed last,
+  // and every file in that folder was then identified as the picked show.
+  const h = boot();
+  h.global.parseFilename("file:///Users/me/Videos/Severance/Season 1/05.mkv");
+  assert.equal(h.global.currentParsed.titleDir, "Severance", "fixture did not parse");
+
+  const url = "file:///Users/me/Videos/Episode 3.mkv";
+  h.iina._emit("fileChanged", { url });
+  await settle();
+  assert.equal(h.global.currentParsed, null, "the failed parse kept the previous file's state");
+
+  // The user identifies the unparseable file by hand.
+  h.global.selShow = { id: 999, name: "Wrong Show", poster_path: "" };
+  h.global.selSeason = 1;
+  h.global.episodeCache = [{ episode_number: 1, name: "Pilot" }];
+  h.global.pickEp(0, false);
+
+  assert.deepEqual(folderMap(h), {}, "a folder was pinned from a stale parse");
+});

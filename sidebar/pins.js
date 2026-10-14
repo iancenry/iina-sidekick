@@ -62,7 +62,7 @@ function parseFolderHints(url) {
   var segs = pathSegments(url);
   // `dir` is the directory the title came from, which is what gets pinned:
   // the show folder, not the Season folder or the media folder below it.
-  var out = { title: "", season: null, year: null, dir: "" };
+  var out = { title: "", season: null, dir: "" };
   var floor = Math.max(0, segs.length - FOLDER_LOOKUP_DEPTH);
 
   for (var i = segs.length - 1; i >= floor; i--) {
@@ -85,11 +85,10 @@ function parseFolderHints(url) {
       if (isRealTitle(rest)) { out.title = rest; out.dir = seg; break; }
       continue;
     }
-    // A bare year directory is the film's date, not its title.
-    if (/^(?:19|20)\d{2}$/.test(seg)) {
-      if (out.year === null) out.year = parseInt(seg, 10);
-      break;
-    }
+    // A bare year directory is the film's date, not its title. Nothing
+    // downstream consumes a directory year — isMovie reads the filename's own
+    // — so the walk simply stops here.
+    if (/^(?:19|20)\d{2}$/.test(seg)) break;
     // Anything below this point describes the disk rather than the show, and
     // the walk stops rather than stepping over it: continuing upward is what
     // ended up naming a show after the user's own home directory.

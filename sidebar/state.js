@@ -62,15 +62,19 @@ function invalidateLookups() {
 // empty result set is remembered: a network failure is not an answer, and a
 // candidate that failed must be tried again. Session-scoped and time-bound,
 // so nothing is written to storage and a TMDB index update heals in minutes.
+//
+// Keyed by endpoint as well as query: "Foo" having no series on TMDB says
+// nothing about whether it has a film, and a shared key made the TV miss
+// answer the film's question too.
 var searchMisses = {};
 var SEARCH_MISS_TTL_MS = 10 * 60 * 1000;
 var SEARCH_MISS_CAP = 200;
-function searchMissed(q) {
-  var at = searchMisses[q];
+function searchMissed(endpoint, q) {
+  var at = searchMisses[endpoint + "\u0000" + q];
   return at && (Date.now() - at) < SEARCH_MISS_TTL_MS;
 }
-function noteSearchMiss(q) {
-  searchMisses[q] = Date.now();
+function noteSearchMiss(endpoint, q) {
+  searchMisses[endpoint + "\u0000" + q] = Date.now();
   var keys = Object.keys(searchMisses);
   if (keys.length <= SEARCH_MISS_CAP) return;
   // Drop the oldest half rather than growing for the life of the session; the

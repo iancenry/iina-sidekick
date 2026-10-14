@@ -103,6 +103,3 @@ function isPlaceholderTitle(t) {
     return TRAILING_JUNK[w] === 1 || JUNK_WORDS.indexOf(w) !== -1;
   });
 }
-
-// Directory names only, so ["Severance", "Season 2"] for
-// "file:///…/Severance/Season 2/05.mkv".

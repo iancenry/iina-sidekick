@@ -272,3 +272,23 @@ test("a failed lookup offers no rows, because it has none to offer", async () =>
   assert.doesNotMatch(panel, /pickItemByIndex/, "rows offered with no results behind them");
   assert.match(panel, /Lookup failed/);
 });
+
+test("a series miss does not block the same name's film search", async () => {
+  // The miss memory was keyed on the query alone, so "Foo" having no series
+  // skipped the /search/movie call for a film called Foo within the same
+  // session: zero film requests and "No match" for a film TMDB held.
+  const h = boot({
+    routes: {
+      "/3/search/tv": { results: [] },
+      "/3/search/movie": { results: [{ id: 550, title: "Foo", release_date: "2019-05-05", vote_count: 900 }] },
+      "/3/movie/550": { title: "Foo", release_date: "2019-05-05", vote_average: 8, images: {}, overview: "" }
+    }
+  });
+  await identify(h, "file:///v/Foo.S01E01.mkv");   // the series miss
+  await identify(h, "file:///v/Foo.2019.mkv");     // same name, a film
+
+  const info = episodeSelected(h);
+  assert.ok(info, "the film was never identified");
+  assert.equal(info.isMovie, true);
+  assert.equal(info.epTitle, "Foo");
+});

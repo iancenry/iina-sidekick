@@ -99,6 +99,20 @@ var words = letters.split(" ").filter(function(w) { return w; });
     var last = raw.toLowerCase().replace(/[^\w]/g, "");
     if (!/[a-z0-9]/i.test(raw)) { words.pop(); continue; }
     if (!TRAILING_JUNK[last] && !/^\d{1,3}$/.test(last)) break;
+    // A bare number is a leftover from a tag ("WEB- 1", "Frieren - 05") or a
+    // padded counter ("Egghead 04") — but it can also be part of the title,
+    // and dropping the 19 of "Station 19" or the 3 of "Spider-Man 3" left a
+    // name that identifies a different film. Only a number that looks like a
+    // leftover comes off: zero-padded, hanging off a separator, or hanging
+    // off a tag.
+    if (/^\d{1,3}$/.test(last)) {
+      var prev = words[words.length - 2] || "";
+      var prevLast = prev.toLowerCase().replace(/[^\w]/g, "");
+      var leftover = /^0\d/.test(last) ||           // padded counter
+                     !/[a-z0-9]/i.test(prev) ||     // hangs off a separator
+                     !!TRAILING_JUNK[prevLast];     // hangs off a tag
+      if (!leftover) break;
+    }
     var kept = words.pop();
     var allWeak = words.every(function(w) {
       return TITLE_LESS_WORDS[w.toLowerCase().replace(/[^\w]/g, "")];
@@ -195,8 +209,10 @@ function parseEpisodeCode(base) {
       var r = pats[i].map(m);
       // An episode is required unless the pattern says otherwise: only a bare
       // season carries none, and every other pattern matching here is a claim
-      // about the episode number.
-      if ((!pats[i].seasonOnly && !r.episode) || r.episode < 0) return null;
+      // about the episode number. Tested against null, not falsiness: episode
+      // 0 is a real value ("Show.S01E00.mkv" is a special or a preview), and
+      // rejecting it left the raw code in the title and the file unidentified.
+      if ((!pats[i].seasonOnly && r.episode === null) || r.episode < 0) return null;
       // A bare 4-digit year is a movie date, not an episode number. Applied
       // to every pattern rather than one, so that inserting a pattern above
       // cannot quietly leave this guard pointing at the wrong one.
@@ -249,11 +265,17 @@ function cleanTitle(base, code) {
     // that is how a long-running series writes it ("One Piece 1062"), and
     // leaving it capped at three kept the number in the title and cost a wasted
     // search. The year guard keeps "1917" and "2019" as titles.
-    t = t.replace(/[\s-]+[-]?\s*\d{1,4}(?:v\d)?$/i, function (m) {
-      var n = parseInt(m.replace(/[^\d]/g, ""), 10);
-      if (n >= 1900 && n <= 2099) return m;
-      return " ";
-    });
+    //
+    // Only for codes that are not explicitly season/episode shaped. An SxxEyy
+    // name has had its code removed above, so a number still trailing there is
+    // part of the title: "Station.19.S01E01" is Station 19, not Station.
+    if (!code.seasonFromName) {
+      t = t.replace(/[\s-]+[-]?\s*\d{1,4}(?:v\d)?$/i, function (m) {
+        var n = parseInt(m.replace(/[^\d]/g, ""), 10);
+        if (n >= 1900 && n <= 2099) return m;
+        return " ";
+      });
+    }
   }
 
   // Channel specs must go before digits turn into separate words, and without

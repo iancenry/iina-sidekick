@@ -49,7 +49,7 @@ function renderSearchResults(data, heading) {
       var title = item.title || item.name || "Untitled";
       var year  = yearOf(item.release_date || item.first_air_date);
       var img   = item.poster_path
-        ? '<img class="rposter" src="'+IB+item.poster_path+'" />'
+        ? '<img class="rposter" src="'+IB+htmlEsc(item.poster_path)+'" />'
         : '<div class="rposter"></div>';
       html += '<div class="rrow">' + img +
         '<div class="ri"><div class="rn">'+htmlEsc(title)+'</div>' +
