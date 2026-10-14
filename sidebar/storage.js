@@ -91,7 +91,9 @@ function showSaved(info) {
   var m = [];
   if (info.code)    m.push(htmlEsc(info.code));
   if (info.airDate) m.push(htmlEsc(info.airDate));
-  if (info.rating)  m.push('<span class="rat">&#9733; ' + htmlEsc(info.rating) + '</span>');
+  if (info.rating)  m.push('<span class="rat">&#9733; ' + htmlEsc(info.rating)
+    + (info.ratingNote ? ' <span class="rat-note">' + htmlEsc(info.ratingNote) + '</span>' : '')
+    + '</span>');
   document.getElementById("s-meta").innerHTML = m.join(" &nbsp;·&nbsp; ");
 
   // Series context line, empty for a film.

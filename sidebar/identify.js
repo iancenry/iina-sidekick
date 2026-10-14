@@ -212,6 +212,10 @@ var alt = parsed.altTitles || { strong: [], weak: [] };
       giveUp("No match for " + htmlEsc(parsed.fileName) + ": search above.");
       return;
     }
+    // A question TMDB already answered with nothing in this session is not
+    // worth a second round trip: the release-group suffix repeats on every
+    // file of a batch, so episode 2 goes straight to the shorter prefix.
+    if (searchMissed(candidates[i])) { attempt(i + 1); return; }
     var endpoint = parsed.isMovie ? "search/movie" : "search/tv";
     var q = encodeURIComponent(candidates[i]);
     fetch("https://api.themoviedb.org/3/" + endpoint + "?api_key=" + TK + "&query=" + q)
@@ -224,7 +228,7 @@ var alt = parsed.altTitles || { strong: [], weak: [] };
 
 if (parsed.isMovie) {
             list = (data.results || []).filter(function(x) { return x.title; });
-            if (!list.length) return attempt(i + 1);
+            if (!list.length) { noteSearchMiss(candidates[i]); return attempt(i + 1); }
             if (!suggestions.length) suggestions = tagResults(list, "movie");
             // A matching release year is a far stronger signal than votes, because
             // remakes share titles, so "Footloose 1984" must not pick 2011. The name
@@ -249,7 +253,7 @@ if (parsed.isMovie) {
           } else {
           list = (data.results || [])
             .filter(function(x) { return x.media_type !== "movie" && x.name; });
-          if (!list.length) return attempt(i + 1);
+          if (!list.length) { noteSearchMiss(candidates[i]); return attempt(i + 1); }
           if (!suggestions.length) suggestions = tagResults(list, "tv");
           // Rank by how well each result's name matches the candidate it came
           // from, using votes only to break a tie between equally good names.
@@ -374,6 +378,9 @@ function applyShowDetail(show, code, absolute, token) {
   selShow._name = show.name;
   selShow._seasons = (show.seasons || []).filter(function(s) { return s.season_number > 0; });
   showLogoUrl = pickLogo(show.images);
+  // The show's own score, for episodes TMDB has no votes for. Stashed on the
+  // selection rather than a module global so it cannot outlive the show.
+  selShow._rating = show.vote_average || 0;
   showTotals = {
     seasons: show.number_of_seasons || selShow._seasons.length || null,
     episodes: show.number_of_episodes || null

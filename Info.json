@@ -1,9 +1,9 @@
 {
   "name": "Sidekick",
   "identifier": "com.iancenry.sidekick",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "ghRepo": "iancenry/iina-sidekick",
-  "ghVersion": 1,
+  "ghVersion": 2,
   "author": {
     "name": "iancenry",
     "url": "https://github.com/iancenry"

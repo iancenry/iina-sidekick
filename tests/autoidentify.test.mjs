@@ -71,6 +71,32 @@ test("searches the parsed title, not the whole filename", async () => {
   assert.deepEqual(searchedQueries(h.fetchCalls).filter(Boolean), ["Severance"]);
 });
 
+test("a release-group suffix TMDB missed once is not asked again for the next episode", async () => {
+  // Every file in a batch carries the same release-group suffix, so without
+  // the session miss memory each new episode spent its first round trip
+  // re-learning that the suffix is noise.
+  const h = boot({
+    routes: {
+      "/3/search/tv": (url) =>
+        decodeURIComponent(url).includes("Severance BluMovie")
+          ? { results: [] }
+          : { results: [{ id: 1399, name: "Severance", vote_count: 4000 }] }
+    }
+  });
+  await identify(h, "file:///v/Severance.1080p.BluMovie.S02E01.mkv");
+  assert.equal(episodeSelected(h).code, "S02E01");
+  const firstQueries = searchedQueries(h.fetchCalls).filter(Boolean);
+  assert.deepEqual(firstQueries, ["Severance BluMovie", "Severance"],
+    `the first identification did not walk the ladder: ${JSON.stringify(firstQueries)}`);
+
+  const before = h.fetchCalls.length;
+  await identify(h, "file:///v/Severance.1080p.BluMovie.S02E02.mkv");
+  assert.equal(episodeSelected(h).code, "S02E02");
+  const secondQueries = searchedQueries(h.fetchCalls.slice(before)).filter(Boolean);
+  assert.deepEqual(secondQueries, ["Severance"],
+    `the missed candidate cost a request again: ${JSON.stringify(secondQueries)}`);
+});
+
 test("a film is identified by year, and a remake loses", async () => {
   const h = boot({
     routes: {

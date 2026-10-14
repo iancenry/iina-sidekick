@@ -11,6 +11,7 @@ const SHOW = {
   poster_path: "/p.jpg",
   number_of_seasons: 2,
   number_of_episodes: 19,
+  vote_average: 8.6,
   seasons: [{ season_number: 1 }, { season_number: 2 }],
   images: {}
 };
@@ -92,6 +93,54 @@ test("a film carries no series context", async () => {
   assert.ok(!info.context, `film should have no context line: ${info.context}`);
 });
 
+test("an episode TMDB has no votes for borrows the show's score, labelled", async () => {
+  // A zero vote_average is how TMDB says "nobody rated this yet", and the card
+  // used to show a bare code and air date with no star at all. The show's own
+  // score is already in the detail response.
+  const h = boot({
+    "/3/tv/1399/season/2": {
+      poster_path: "/s2.jpg",
+      episodes: [
+        { episode_number: 3, name: "In Perpetuity", air_date: "2025-03-07", vote_average: 0, overview: "o3" }
+      ]
+    }
+  });
+  await identify(h, "file:///v/Severance S02E03.mkv");
+  const info = selected(h);
+  assert.ok(info, "nothing was selected");
+  assert.equal(info.rating, "8.6", "the series score did not stand in");
+  assert.equal(info.ratingNote, "series", "the borrowed score is unlabelled");
+});
+
+test("an episode's own score is never labelled as the series'", async () => {
+  const h = boot();
+  await identify(h, "file:///v/Severance S02E03.mkv");
+  const info = selected(h);
+  assert.equal(info.rating, "9.1");
+  assert.equal(info.ratingNote, "");
+});
+
+test("an episode's own still is used on the card when TMDB has one", async () => {
+  // The season poster repeats on every episode, so the episode's still is a
+  // better picture where TMDB carries one.
+  const h = boot({
+    "/3/tv/1399/season/2": {
+      poster_path: "/s2.jpg",
+      episodes: [
+        { episode_number: 3, name: "In Perpetuity", air_date: "2025-03-07", vote_average: 9.1, still_path: "/still3.jpg", overview: "o3" }
+      ]
+    }
+  });
+  await identify(h, "file:///v/Severance S02E03.mkv");
+  assert.match(selected(h).posterUrl, /\/still3\.jpg$/);
+});
+
+test("an episode without a still falls back to the season poster", async () => {
+  const h = boot();
+  await identify(h, "file:///v/Severance S02E03.mkv");
+  assert.equal(selected(h).posterUrl, "https://image.tmdb.org/t/p/w500/s2.jpg");
+});
+
 test("the overlay renders the context line and clears it again", () => {
   const o = loadOverlay();
   o.iina._emit("showData", {
@@ -104,6 +153,23 @@ test("the overlay renders the context line and clears it again", () => {
   // A film after an episode must not inherit the previous show's line.
   o.iina._emit("showData", { showTitle: "Movie", epTitle: "Fight Club", code: "1999", context: "" });
   assert.equal(o.document.getElementById("ctx-row").textContent, "");
+});
+
+test("the overlay names a series rating as the series'", () => {
+  const o = loadOverlay();
+  o.iina._emit("showData", {
+    showTitle: "Severance", epTitle: "In Perpetuity", code: "S02E03",
+    rating: "8.6", ratingNote: "series"
+  });
+  const meta = o.document.getElementById("meta-row").innerHTML;
+  assert.match(meta, /8\.6/);
+  assert.match(meta, /rat-note/);
+  assert.match(meta, />series</);
+
+  // An episode's own score carries no label, and a previous label must not
+  // survive into the next card.
+  o.iina._emit("showData", { showTitle: "Severance", epTitle: "Half Loop", code: "S02E02", rating: "9.1" });
+  assert.doesNotMatch(o.document.getElementById("meta-row").innerHTML, /rat-note/);
 });
 
 test("an entry saved before the context line existed re-identifies once", async () => {

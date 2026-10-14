@@ -73,6 +73,9 @@
   }
   .mt span+span::before { content:' · '; color:rgba(255,255,255,0.3); margin:0 6px; }
   .rat { color:#f5c518; font-weight:600; }
+  /* A score borrowed from the show because the episode has no votes of its
+     own. Same star, but the source is named so the two are never confused. */
+  .rat-note { color:rgba(255,255,255,0.45); font-weight:400; font-size:85%; margin-left:3px; }
   /* Series context: where this episode sits and when the next one lands.
      Quieter than the meta row because it is reference, not the headline. */
   .cx {
@@ -365,7 +368,9 @@ iina.onMessage("showData", function(d) {
   var parts = [];
   if (d.code)    parts.push("<span>" + esc(d.code) + "</span>");
   if (d.airDate) parts.push("<span>" + esc(d.airDate) + "</span>");
-  if (d.rating)  parts.push('<span class="rat">&#9733; ' + esc(d.rating) + "</span>");
+  if (d.rating)  parts.push('<span class="rat">&#9733; ' + esc(d.rating)
+    + (d.ratingNote ? ' <span class="rat-note">' + esc(d.ratingNote) + '</span>' : '')
+    + "</span>");
   document.getElementById("meta-row").innerHTML = parts.join("");
 
   // Series context, empty for a film.

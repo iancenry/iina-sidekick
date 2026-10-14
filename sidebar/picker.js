@@ -45,6 +45,8 @@ function pickItem(item) {
       selShow._name    = show.name;
       selShow._seasons = (show.seasons||[]).filter(function(s){return s.season_number>0;});
       showLogoUrl      = pickLogo(show.images);
+      // The show's own score, for episodes TMDB has no votes for.
+      selShow._rating  = show.vote_average || 0;
       showTotals       = {
         seasons: show.number_of_seasons || selShow._seasons.length || null,
         episodes: show.number_of_episodes || null
@@ -175,15 +177,25 @@ function pickEp(idx, auto) {
   // arrives after the user has moved on must not act on the new file. (The
   // staleness itself is checked by renderEps, before this is ever reached.)
   var pickDir = currentParsed && currentParsed.titleDir;
+  // An episode TMDB has no votes for carries vote_average 0, and a blank star
+  // was all the card showed. The show's score arrived with the detail response
+  // already in hand, so it stands in, marked as the series figure so an
+  // episode's own score is never confused with the show's.
+  var ownRating  = ep.vote_average || 0;
+  var showRating = selShow._rating || 0;
   var info = {
     showTitle: selShow._name||selShow.name||"",
     epTitle:   ep.name||("Episode "+ep.episode_number),
     code:      epCode(selSeason, ep.episode_number),
     context:   seriesContext(selSeason, ep),
     airDate:   ep.air_date||"",
-    rating:    ep.vote_average?ep.vote_average.toFixed(1):"",
+    rating:    (ownRating || showRating) ? (ownRating || showRating).toFixed(1) : "",
+    ratingNote: (!ownRating && showRating) ? "series" : "",
     overview:  ep.overview||"",
-    posterUrl: seasonPosterUrl || (selShow && selShow.poster_path ? IW + selShow.poster_path : ""),
+    // The episode's own still beats the season poster, which repeats on every
+    // episode of the season. Falls back to the season poster, then the show's.
+    posterUrl: ep.still_path ? IW + ep.still_path
+             : (seasonPosterUrl || (selShow && selShow.poster_path ? IW + selShow.poster_path : "")),
     logoUrl: showLogoUrl,
     tmdbId: String(selShow.id), season: selSeason, episode: ep.episode_number, isMovie: false,
     // The absolute number this entry was derived from, or null when the

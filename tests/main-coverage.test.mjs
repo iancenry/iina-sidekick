@@ -462,6 +462,51 @@ test("the cache is bounded", () => {
   assert.equal(m.global.segmentCache.k0, undefined, "the oldest entry was kept");
 });
 
+test("a persisted skip answer is served without asking the providers", async () => {
+  // Segment answers used to die with the process, so every replay re-asked
+  // four community services the same question, and an offline replay had
+  // nothing at all.
+  const at = Date.now();
+  const m = skipSession({}, {
+    preferences: {
+      skip_timing_cache: {
+        [IMDB + ":1:1"]: { at, list: [{ kind: "intro", start: 0, end: 90 }] }
+      }
+    }
+  });
+  m.fromWebView("sidebar", "episodeSelected", EPISODE);
+  await settle();
+  assert.equal(m.sink.httpCalls.length, 0,
+    `providers were asked despite a stored answer: ${JSON.stringify(m.sink.httpCalls)}`);
+  assert.equal(m.global.segments.length, 1, "the stored segments were not installed");
+});
+
+test("a stale persisted skip answer is dropped instead of served", async () => {
+  const staleAt = Date.now() - (100 * 86400000);
+  const m = skipSession({ [introKey(1)]: hit(0, 90) }, {
+    preferences: {
+      skip_timing_cache: {
+        [IMDB + ":1:1"]: { at: staleAt, list: [{ kind: "intro", start: 0, end: 90 }] }
+      }
+    }
+  });
+  assert.equal(m.global.skipStore[IMDB + ":1:1"], undefined, "the stale entry survived load");
+  m.fromWebView("sidebar", "episodeSelected", EPISODE);
+  await settle();
+  assert.ok(m.sink.httpCalls.some((u) => u.includes("introdb.app")),
+    "the providers were not asked after the stored answer expired");
+});
+
+test("a fresh answer is written to the persisted store", async () => {
+  const m = skipSession({ [introKey(1)]: hit(0, 90) });
+  m.fromWebView("sidebar", "episodeSelected", EPISODE);
+  await settle();
+  const store = m.global.iina.preferences.get("skip_timing_cache");
+  const entry = store && store[IMDB + ":1:1"];
+  assert.ok(entry && entry.list.length === 1,
+    "the answer was not persisted for the next run: " + JSON.stringify(store));
+});
+
 // ── A lookup that is superseded still answers ───────────────────────
 
 test("an abandoned lookup reports, so Search again comes back", async () => {

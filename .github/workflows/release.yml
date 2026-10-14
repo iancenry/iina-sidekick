@@ -1,0 +1,98 @@
+name: Release
+
+# A tag push is the switch: v1.5.0 publishes release 1.5.0 with the packed
+# .iinaplgz attached, which is what IINA's "Install from GitHub" and its
+# auto-update check both download (api.github.com/repos/<ghRepo>/releases/latest,
+# then the iinaplgz asset; the archive's Info.json must carry a greater
+# ghVersion than the installed copy).
+#
+# workflow_dispatch builds and tests the same package without publishing it,
+# so the pipeline can be exercised before a tag exists. No schedule, and the
+# only runner is ubuntu: a release is a rare, deliberate one-off.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Test, pack, publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Run the suite
+        run: npm test
+
+      - name: Check the tag agrees with Info.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(node -p "JSON.parse(require('fs').readFileSync('Info.json','utf8')).version")"
+          if [ "$tag" != "$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match Info.json version $version" >&2
+            exit 1
+          fi
+
+      # The same staging rules as scripts/pack.sh, without the macOS-only
+      # iina-plugin binary: the packer is a zip with a different extension.
+      # Local-only files (.git, todo/, notes, .env) must never ride along, so
+      # only the shipped paths are listed.
+      - name: Build the plugin package
+        run: |
+          set -eu
+          version="$(node -p "JSON.parse(require('fs').readFileSync('Info.json','utf8')).version")"
+          artifact="$PWD/iina-sidekick-$version.iinaplgz"
+          stage="$(mktemp -d)"
+          trap 'rm -rf "$stage"' EXIT
+          stage_dir="$stage/iina-sidekick"
+          mkdir -p "$stage_dir"
+          cp Info.json main.js overlay.html sidebar.html README.md LICENSE "$stage_dir/"
+          cp -R sidebar "$stage_dir/sidebar"
+          ( cd "$stage_dir" && zip -qr "$artifact" \
+              Info.json main.js overlay.html sidebar.html README.md LICENSE sidebar )
+
+          # A package missing a sidebar module loads as a blank panel, with no
+          # error anywhere, so every shipped file is asserted present.
+          listing="$(unzip -l "$artifact")"
+          for f in Info.json main.js overlay.html sidebar.html README.md LICENSE; do
+            printf '%s\n' "$listing" | grep -q "[[:space:]]$f\$" || {
+              echo "error: package is missing $f" >&2; exit 1; }
+          done
+          for f in sidebar/*.js; do
+            rel="sidebar/$(basename "$f")"
+            printf '%s\n' "$listing" | grep -q "[[:space:]]$rel\$" || {
+              echo "error: package is missing $rel" >&2; exit 1; }
+          done
+          if printf '%s\n' "$listing" | grep -Eq '\.env|\.git/|todo/|tests/|NOTES\.md|AGENTS\.md'; then
+            echo "error: package contains local-only files:" >&2
+            printf '%s\n' "$listing" | grep -E '\.env|\.git/|todo/|tests/|NOTES\.md|AGENTS\.md' >&2
+            exit 1
+          fi
+          echo "packed $(basename "$artifact")"
+
+      - name: Keep the package as a workflow artifact (dry run)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: iina-sidekick-package
+          path: "*.iinaplgz"
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(node -p "JSON.parse(require('fs').readFileSync('Info.json','utf8')).version")"
+          gh release create "$GITHUB_REF_NAME" \
+            "iina-sidekick-$version.iinaplgz" \
+            --title "Sidekick $version" \
+            --generate-notes

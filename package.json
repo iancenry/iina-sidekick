@@ -1,6 +1,6 @@
 {
   "name": "iina-sidekick",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
   "description": "Test harness only. The plugin itself ships as plain files with no build step and no dependencies.",
   "scripts": {

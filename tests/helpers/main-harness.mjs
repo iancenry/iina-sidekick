@@ -177,6 +177,17 @@ export function loadMain(opts = {}) {
       buildMenu() {}
     },
     utils: { exec() { return Promise.resolve(""); }, ask() { return Promise.resolve(""); } },
+    // IINA's plugin preferences, the only durable store the entry file can
+    // reach. Seeded by tests to model an answer left by a previous run.
+    preferences: (() => {
+      const store = new Map(Object.entries(opts.preferences || {}));
+      return {
+        get(k) { return store.has(k) ? store.get(k) : undefined; },
+        set(k, v) { store.set(k, v); },
+        sync() {},
+        _store: store
+      };
+    })(),
     file: opts.file || {}
   };
 

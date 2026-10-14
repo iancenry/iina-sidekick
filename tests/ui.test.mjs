@@ -339,3 +339,19 @@ test("a recent pick cannot be contradicted by a leftover season grid", () => {
   // The card is the point of the click, so it must still be there.
   assert.equal(h.document.getElementById("s-title").textContent, info.epTitle);
 });
+
+test("the saved card marks a series rating as the series'", () => {
+  const h = boot();
+  h.global.showSaved({
+    showTitle: "Severance", epTitle: "In Perpetuity",
+    code: "S02E03", rating: "8.6", ratingNote: "series"
+  });
+  const meta = h.document.getElementById("s-meta").innerHTML;
+  assert.match(meta, /8\.6/);
+  assert.match(meta, /rat-note/);
+  assert.match(meta, />series</);
+
+  // An episode's own score carries no label.
+  h.global.showSaved({ showTitle: "Severance", epTitle: "Half Loop", rating: "9.1" });
+  assert.doesNotMatch(h.document.getElementById("s-meta").innerHTML, /rat-note/);
+});

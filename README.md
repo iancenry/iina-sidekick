@@ -218,6 +218,10 @@ that agree. Coverage is good for popular shows and thin for new or niche ones.
 chapters already answered it. If the databases have nothing, the chapters stand:
 you cannot lose a working pill by pressing it.
 
+Merged timings are cached, so replaying an episode answers instantly and works
+offline. The cache is bounded (90 days, 300 episodes); **Search again** always
+re-asks and replaces the stored answer.
+
 <img src="docs/images/skip-pill.png" alt="A Skip Intro button in the bottom-right corner of the video, appearing as playback reaches the opening." width="480">
 
 The pill only appears inside a segment, and only while the video is playing. It
@@ -266,6 +270,36 @@ episode 1234 of a show called IMG.
 an upstream API changes or before a release. Add `TMDB_API_KEY` and
 `DDD_API_KEY` to `.env` to verify response shapes as well; without them the
 endpoints are still proven alive and enforcing auth.
+
+```sh
+node scripts/logo-audit.mjs "Fight Club" "Severance" tv:1399
+```
+
+`logo-audit.mjs` samples the title treatments TMDB actually holds for those
+titles and reports what the filter in `pickLogo` does with each one — picked,
+too square, or non-English. The 2.5:1 floor was a guess, and this is how it
+gets re-tuned against data. Needs `TMDB_API_KEY`.
+
+### Cutting a release
+
+The Release workflow is the whole process. Bump the version in `Info.json`,
+`package.json` and the `main.js` header (the suite fails if they disagree),
+bump `ghVersion` in `Info.json` — IINA compares that integer to prompt updates,
+and a release that does not move it is invisible — commit, then push a tag:
+
+```sh
+git tag v1.5.0 && git push origin v1.5.0
+```
+
+The workflow runs the suite, checks the tag against `Info.json`, packs the
+`.iinaplgz` and attaches it to the GitHub release. IINA installs from
+`owner/repo` and updates from `/releases/latest`, so no local tooling is
+needed. `workflow_dispatch` builds and tests the package without publishing,
+which is the way to dry-run the pipeline.
+
+Run the API Health workflow manually before tagging if an upstream may have
+moved; it is `workflow_dispatch` only, with no schedule, so it spends no
+minutes on its own.
 
 ## Attribution
 

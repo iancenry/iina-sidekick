@@ -3,7 +3,7 @@ var TK = localStorage.getItem("epinfo_tmdb_key") || "";
 // different sizes, with nothing recording which was which.
 var IMG_BASE = "https://image.tmdb.org/t/p/";
 var IB   = IMG_BASE + "w92";    // search results
-var IW   = IMG_BASE + "w500";   // the card's poster
+var IW   = IMG_BASE + "w500";   // the card's poster (or an episode's still)
 var IL   = IMG_BASE + "w780";   // the title treatment
 
 var selShow      = null;
@@ -53,6 +53,31 @@ var lookupEpoch = 0;
 function invalidateLookups() {
   lookupEpoch++;
   autoCancelTimer();
+}
+
+// Candidates TMDB has already answered with nothing, so the ladder does not
+// ask the identical question again. A release-group suffix ("Show Name
+// BluMovie") sits on every file of a batch, and without this each new episode
+// spent its first round trip re-learning that the suffix is noise. Only an
+// empty result set is remembered: a network failure is not an answer, and a
+// candidate that failed must be tried again. Session-scoped and time-bound,
+// so nothing is written to storage and a TMDB index update heals in minutes.
+var searchMisses = {};
+var SEARCH_MISS_TTL_MS = 10 * 60 * 1000;
+var SEARCH_MISS_CAP = 200;
+function searchMissed(q) {
+  var at = searchMisses[q];
+  return at && (Date.now() - at) < SEARCH_MISS_TTL_MS;
+}
+function noteSearchMiss(q) {
+  searchMisses[q] = Date.now();
+  var keys = Object.keys(searchMisses);
+  if (keys.length <= SEARCH_MISS_CAP) return;
+  // Drop the oldest half rather than growing for the life of the session; the
+  // cap is only reachable by a large scan, where the oldest answers are the
+  // ones a returning user is least likely to repeat.
+  keys.sort(function(a, b) { return searchMisses[a] - searchMisses[b]; });
+  for (var i = 0; i < keys.length / 2; i++) delete searchMisses[keys[i]];
 }
 
 // A token identifies which lookup a piece of async work belongs to, so a

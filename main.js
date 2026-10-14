@@ -1,5 +1,5 @@
 // ============================================================
-// IINA Plugin: Sidekick  @version 1.4.0
+// IINA Plugin: Sidekick  @version 1.5.0
 // The version is kept in step with Info.json and package.json by a CI check.
 // Machine-readable on purpose: the check reads this line, and a header written
 // for humans had drifted once already (1.3.1 in a 1.4.0 build, so a bug report
@@ -144,7 +144,7 @@ var segments           = [];     // resolved skip segments for this file
 var activeSegment      = null;   // the one the pill is currently offering
 var timeWatcher        = null;   // id of the mpv.time-pos observer
 var tmdbKey            = "";     // pushed from the sidebar; needed to resolve IMDB ids
-var segmentCache       = {};     // "imdb:season:episode" -> segments
+var segmentCache       = {};     // "imdb:season:episode" -> segments, this session
 var dddEnabled         = false;  // opt-in: scene content warnings from DoesTheDogDie
 var dddKey             = "";     // pushed from the sidebar like the TMDB one
 var dddLead            = 30;     // seconds before a scene its cue card appears
@@ -176,6 +176,9 @@ function showOverlay(d) {
     code:        d.code       || "",
     airDate:     d.airDate    || "",
     rating:      d.rating     || "",
+    // "series" when the star is the show's score because the episode has no
+    // votes of its own; empty for an episode's own rating or a film.
+    ratingNote:  d.ratingNote || "",
     overview:    d.overview   || "",
     // Where the episode sits in its season and when the next lands. Empty for
     // a film, which has no season.
@@ -572,9 +575,14 @@ async function resolveSegmentsInner(info, forceRefresh) {
   if (!imdb) { report([]); return; }
 
   var cacheKey = imdb + ":" + (info.season || 0) + ":" + (info.episode || 0);
-  if (segmentCache[cacheKey] && !forceRefresh) {
-    segments = segmentCache[cacheKey];
-    if (segments.length) startTimeWatcher();
+  // The session map first, then the persisted copy: an episode watched in an
+  // earlier run still answers without asking four community services again,
+  // and still answers offline.
+  var cached = segmentCache[cacheKey] ||
+    (skipStore[cacheKey] ? skipStore[cacheKey].list : null);
+  if (cached && cached.length && !forceRefresh) {
+    segments = cached;
+    startTimeWatcher();
     report(segments);
     return;
   }
@@ -625,8 +633,66 @@ async function resolveSegmentsInner(info, forceRefresh) {
 // playing.
 var SEGMENT_CACHE_MAX = 400;
 
+// ── The persistent skip cache ────────────────────────────────────────
+// IINA's plugin preferences are the only durable store the entry file can
+// reach, so the merged answer lives there, keyed exactly like the session
+// map. Age- and count-bounded for the same reason the sidebar's maps are:
+// nothing else would ever shrink it. Reads are tolerant of every shape a
+// preference can come back as; a write that fails costs a refetch, not a
+// crash.
+var SKIP_STORE_PREF = "skip_timing_cache";
+var SKIP_STORE_MAX_AGE_MS = 90 * 86400000;
+var SKIP_STORE_MAX = 300;
+
+// Loaded here, under the constants it reads. A function declaration hoists,
+// so an earlier call would run with the key still undefined and silently load
+// an empty store.
+var skipStore = loadSkipStore();
+
+function loadSkipStore() {
+  var out = {}, raw;
+  try { raw = iina.preferences.get(SKIP_STORE_PREF); } catch (e) { return out; }
+  // IINA hands back the stored JSON parsed, but a string is tolerated so a
+  // hand-edited or older value cannot blank the whole store.
+  if (typeof raw === "string") {
+    try { raw = JSON.parse(raw); } catch (e) { return out; }
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  var now = Date.now();
+  Object.keys(raw).forEach(function(k) {
+    var e = raw[k];
+    if (!e || !Array.isArray(e.list) || !e.list.length) return;
+    // An entry with no stamp cannot be aged, so it is dropped: the store is
+    // new enough that nothing predating the stamp can exist in it.
+    if (typeof e.at !== "number" || now - e.at > SKIP_STORE_MAX_AGE_MS) return;
+    out[k] = { list: e.list, at: e.at };
+  });
+  return out;
+}
+
+function saveSkipStore() {
+  var keys = Object.keys(skipStore);
+  if (keys.length > SKIP_STORE_MAX) {
+    keys.sort(function(a, b) { return (skipStore[a].at || 0) - (skipStore[b].at || 0); });
+    for (var i = 0; i < keys.length - SKIP_STORE_MAX; i++) delete skipStore[keys[i]];
+  }
+  try {
+    iina.preferences.set(SKIP_STORE_PREF, skipStore);
+    // Persisted to disk only when the preferences page closes otherwise, and
+    // there is no preferences page here.
+    iina.preferences.sync();
+  } catch (e) {
+    log("skip cache write failed: " + errStr(e));
+  }
+}
+
 function rememberSegments(key, list) {
   segmentCache[key] = list;
+  // Written through to the persistent store as well: the session map keeps a
+  // replay instant, the store keeps it after a restart. Two providers per
+  // episode are the budget the store is there to protect.
+  skipStore[key] = { list: list, at: Date.now() };
+  saveSkipStore();
   var keys = Object.keys(segmentCache);
   if (keys.length > SEGMENT_CACHE_MAX) {
     keys.slice(0, keys.length - SEGMENT_CACHE_MAX).forEach(function(k) {
