@@ -185,11 +185,14 @@ function parseFilename(url) {
     // The same chain written with underscores: "DDP5_1", "AAC2_0",
     // "DTS-HD_MA_5_1". A codec-shaped tag has to lead, so "Show_1_2" keeps its
     // numbers; and the trailing digit is not allowed to run into another, so
-    // "DDP5_10" keeps its 10. No closing \b: an underscore is a word character,
-    // so it cannot match between that digit and the underscore in "_1_atmos",
-    // which left this rule matching nothing at all and the episode number being
-    // read out of the spec instead.
-    .replace(/\b(?:DD|DD[P5]?|DTS(?:[-_]HD)?|E?AC-?3|AAC|TRUEHD|FLAC|OPUS|ATMOS)[0-9]?(?:[._-][A-Za-z0-9]{1,3})*[._-][0-9](?![0-9])/gi, " ")
+    // "DDP5_10" keeps its 10. It must not run into a letter either: a release
+    // group named "4kHdHub" begins with a digit, and the chain crosses dots,
+    // so "Atmos.DV.HDR.H.265-4kHdHub" matched through the "-4" (265 is a legal
+    // chain token) and left "kHdHub" in the title. No closing \b: an underscore
+    // is a word character, so it cannot match between that digit and the
+    // underscore in "_1_atmos", which left this rule matching nothing at all
+    // and the episode number being read out of the spec instead.
+    .replace(/\b(?:DD|DD[P5]?|DTS(?:[-_]HD)?|E?AC-?3|AAC|TRUEHD|FLAC|OPUS|ATMOS)[0-9]?(?:[._-][A-Za-z0-9]{1,3})*[._-][0-9](?![0-9A-Za-z])/gi, " ")
     .replace(/\b[0-9](?:\.[A-Za-z0-9]{1,3})*\.[0-9](?![0-9])\b/g, " ")  // a bare "5.1"
     .replace(/\bH\.[0-9]{3}\b/gi, " ")
     .replace(/\bX26[45]\b/gi, " ")

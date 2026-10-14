@@ -365,6 +365,53 @@ test("a date in the name is not a release year", () => {
   assert.equal(p.isMovie, false);
 });
 
+// ── Codec chains in dotted names ────────────────────────────────────
+
+test("a dot-separated codec chain does not eat the release group", () => {
+  // The chain crosses dots and "265" is a legal chain token, so the final
+  // separator+digit of "Atmos.DV.HDR.H.265-4kHdHub" matched at the group's
+  // first digit: the tag and the "4" went together and "kHdHub" stayed in the
+  // title. A space breaks the chain, so only dotted names were hit.
+  const p = parse(at("", "VisionQuest.S01E01.No.Strings.2160p.DSNP.WEB-DL.Multi.DDP5.1.Atmos.DV.HDR.H.265-4kHdHub.Com.mkv"));
+  assert.equal(p.title, "VisionQuest No Strings DSNP");
+  assert.equal(p.code.episode, 1);
+  // Any group that starts with a digit is the shape that trips it.
+  assert.equal(parse(at("", "Oppenheimer.2023.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-3L.mkv")).title,
+    "Oppenheimer");
+  // The specs this rule exists for still come off whole.
+  assert.equal(parse(at("", "The.Matrix.1999.1080p.BluRay.x264.DTS-HD.MA.5.1.mkv")).title, "The Matrix");
+  assert.equal(parse(at("", "Show_Name_S02E05_1080p_DDP5_1_atmos_H264-GROUP.mkv")).title, "Show Name");
+});
+
+test("the dotted release identifies the show instead of exhausting the ladder", async () => {
+  // The leftover "DSNP WEB- Multi kHdHub" gave the title seven candidate
+  // prefixes, and AUTO_MAX_TRIES kept the six longest, which dropped the only
+  // one that could match. Every query carried the noise and TMDB answered none
+  // of them, so the panel settled on "No match for …mkv". The parsed title and
+  // the end-to-end outcome are both the point of this one.
+  const app = boot({
+    "/3/search/tv": (url) =>
+      /query=VisionQuest$/.test(decodeURIComponent(url))
+        ? { results: [{ id: 55555, name: "Vision Quest", vote_count: 100, poster_path: "/vq.jpg" }] }
+        : { results: [] },
+    "/3/tv/55555/season/1": {
+      poster_path: "",
+      episodes: [{ episode_number: 1, name: "No Strings", air_date: "2026-10-14" }]
+    },
+    "/3/tv/55555": {
+      id: 55555, name: "Vision Quest",
+      seasons: [{ season_number: 1, episode_count: 8 }], images: {}
+    }
+  });
+  await identify(app,
+    "file:///v/VisionQuest.S01E01.No.Strings.2160p.DSNP.WEB-DL.Multi.DDP5.1.Atmos.DV.HDR.H.265-4kHdHub.Com.mkv");
+  const info = selected(app);
+  assert.ok(info, "the show was not identified");
+  assert.equal(info.showTitle, "Vision Quest");
+  assert.equal(info.code, "S01E01");
+  assert.equal(info.epTitle, "No Strings");
+});
+
 // ── Regressions the fixes themselves introduced ─────────────────────
 
 test("a three-letter language code that is a real title word is kept", () => {
