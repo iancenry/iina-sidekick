@@ -355,6 +355,37 @@
     <div id="skip-status" style="font-size:11px;color:rgba(255,255,255,.4);line-height:1.45;margin-top:5px;display:none"></div>
   </details>
 
+  <details class="sub-sec" data-k="lang">
+    <summary class="sub-hd">Language &amp; Subtitles</summary>
+    <div style="font-size:10px;color:rgba(255,255,255,.25);margin-bottom:8px">
+      Applied when a file opens &nbsp;·&nbsp; codes or names, e.g. <strong style="color:rgba(255,255,255,.4)">eng</strong> &nbsp;·&nbsp; empty = off
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:7px;padding:8px 10px;margin-bottom:8px">
+      <div style="font-size:12px;font-weight:600;color:#fff">Preferred audio language</div>
+      <input id="audio-lang-input" type="text" placeholder="eng, en" maxlength="80"
+        onchange="doSetAudioLang(this.value)"
+        style="width:110px;flex-shrink:0;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);border-radius:6px;padding:4px 7px;color:#fff;font-size:11px;font-family:inherit;outline:none" />
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:7px;padding:8px 10px;margin-bottom:8px">
+      <div style="font-size:12px;font-weight:600;color:#fff">Preferred subtitle language</div>
+      <input id="sub-lang-input" type="text" placeholder="eng, en" maxlength="80"
+        onchange="doSetSubLang(this.value)"
+        style="width:110px;flex-shrink:0;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);border-radius:6px;padding:4px 7px;color:#fff;font-size:11px;font-family:inherit;outline:none" />
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:7px;padding:8px 10px;margin-bottom:8px">
+      <div>
+        <div style="font-size:12px;font-weight:600;color:#fff">Prefer SDH subtitles</div>
+        <div style="font-size:10px;color:rgba(255,255,255,.35);margin-top:2px">Hearing-impaired track over a plain one</div>
+      </div>
+      <label style="position:relative;display:inline-block;width:44px;height:26px;flex-shrink:0;margin-left:10px;cursor:pointer">
+        <input type="checkbox" id="sdh-toggle" style="opacity:0;width:0;height:0;position:absolute" onchange="doToggleSdh(this.checked)" />
+        <span id="sdh-track" style="position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,.2);border-radius:26px;transition:background .2s">
+          <span id="sdh-thumb" style="position:absolute;height:20px;width:20px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:left .2s"></span>
+        </span>
+      </label>
+    </div>
+  </details>
+
   <details class="sub-sec" data-k="ddd">
     <summary class="sub-hd">Scene Content Warnings</summary>
 

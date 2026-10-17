@@ -162,6 +162,11 @@ var sceneSeq           = 0;      // scene-lookup generation, abandoned like load
 var dddShowCache       = {};     // "tmdbId" -> { ratings: [...], stats: {...} }
 var currentVideoUrl    = "";     // url of currently loaded file, sent to sidebar so it can
                                  // restore per-URL TMDB info on re-play
+var audioLangPrefs     = [];     // preferred audio languages, canonical codes, from the sidebar
+var subLangPrefs       = [];     // same, for subtitles
+var preferSdh          = false;  // opt-in: prefer SDH/HI-titled subtitle tracks
+var trackPickPending   = false;  // a new file's track list is still settling
+var trackPickTries     = 0;      // bounded retries for the above
 
 function log(msg) {
   iina.console.log("[EpInfo] " + msg);
@@ -1545,6 +1550,288 @@ function skipScene(via) {
   iina.console.log("[EpInfo] skipped \"" + label + "\" to " + target + "s via " + how + " (" + via + ")");
 }
 
+// ── Preferred language & SDH selection ────────────────────────
+// A file arrives playing whichever track its container marks as default, and
+// on a multi-language release that is as likely to be a language the viewer
+// does not speak as the one they do. The sidebar's preference is applied when
+// a file opens, and only when the track in play does not already match it: a
+// track the user picked themselves is never overridden mid-file.
+//
+// Tracks are matched by their lang field and by their title. External sidecar
+// files carry a real lang — mpv guesses it from the filename itself ("Show.
+// S01E01.eng.srt") — so the title is only a backstop for embedded tracks whose
+// title says "English" while their lang tag is empty.
+
+// Every accepted spelling maps to one canonical code (ISO 639-1 where one
+// exists). Codes alone are not enough: a track may say "eng", "en" or
+// "english", and sidecar files name their language all three ways.
+var LANG_ALIASES = {
+  en: "en", eng: "en", english: "en",
+  fr: "fr", fra: "fr", fre: "fr", french: "fr",
+  de: "de", deu: "de", ger: "de", german: "de",
+  es: "es", spa: "es", spanish: "es",
+  it: "it", ita: "it", italian: "it",
+  pt: "pt", por: "pt", portuguese: "pt",
+  nl: "nl", nld: "nl", dut: "nl", dutch: "nl",
+  sv: "sv", swe: "sv", swedish: "sv",
+  no: "no", nor: "no", norwegian: "no",
+  da: "da", dan: "da", danish: "da",
+  fi: "fi", fin: "fi", finnish: "fi",
+  is: "is", isl: "is", ice: "is", icelandic: "is",
+  pl: "pl", pol: "pl", polish: "pl",
+  cs: "cs", ces: "cs", cze: "cs", czech: "cs",
+  sk: "sk", slk: "sk", slo: "sk", slovak: "sk",
+  hu: "hu", hun: "hu", hungarian: "hu",
+  ro: "ro", ron: "ro", rum: "ro", romanian: "ro",
+  bg: "bg", bul: "bg", bulgarian: "bg",
+  hr: "hr", hrv: "hr", croatian: "hr",
+  sr: "sr", srp: "sr", serbian: "sr",
+  sl: "sl", slv: "sl", slovenian: "sl",
+  ru: "ru", rus: "ru", russian: "ru",
+  uk: "uk", ukr: "uk", ukrainian: "uk",
+  el: "el", ell: "el", gre: "el", greek: "el",
+  tr: "tr", tur: "tr", turkish: "tr",
+  ar: "ar", ara: "ar", arabic: "ar",
+  he: "he", heb: "he", iw: "he", hebrew: "he",
+  fa: "fa", fas: "fa", per: "fa", persian: "fa",
+  hi: "hi", hin: "hi", hindi: "hi",
+  bn: "bn", ben: "bn", bengali: "bn",
+  ta: "ta", tam: "ta", tamil: "ta",
+  te: "te", tel: "te", telugu: "te",
+  ml: "ml", mal: "ml", malayalam: "ml",
+  ur: "ur", urd: "ur", urdu: "ur",
+  th: "th", tha: "th", thai: "th",
+  vi: "vi", vie: "vi", vietnamese: "vi",
+  id: "id", ind: "id", indonesian: "id",
+  ms: "ms", msa: "ms", may: "ms", malay: "ms",
+  tl: "tl", tgl: "tl", fil: "tl", tagalog: "tl", filipino: "tl",
+  sw: "sw", swa: "sw", swahili: "sw",
+  ja: "ja", jpn: "ja", japanese: "ja",
+  ko: "ko", kor: "ko", korean: "ko",
+  zh: "zh", zho: "zh", chi: "zh", chinese: "zh"
+};
+
+// One token to one canonical code. "en-US" falls back to its primary subtag;
+// a token the table does not know is returned as itself, so a language whose
+// spelling is missing from the table can still match a track that spells it
+// the same way.
+function canonLang(tok) {
+  var t = String(tok == null ? "" : tok).toLowerCase().trim();
+  if (!t) return "";
+  if (LANG_ALIASES[t]) return LANG_ALIASES[t];
+  var base = t.split(/[-_]/)[0];
+  if (base && LANG_ALIASES[base]) return LANG_ALIASES[base];
+  return base || t;
+}
+
+// The sidebar's preference string to canonical codes, in order and deduped.
+function parseLangPref(s) {
+  var out = [], seen = {};
+  String(s == null ? "" : s).toLowerCase().split(/[\s,;]+/).forEach(function(tok) {
+    var c = canonLang(tok);
+    if (!c || seen[c]) return;
+    seen[c] = 1;
+    out.push(c);
+  });
+  return out;
+}
+
+// Subtitle extensions to drop before looking for a language word, so the
+// "srt" of a filename is never mistaken for anything.
+var SUB_EXT_TOKENS = { srt: 1, ass: 1, ssa: 1, vtt: 1, sub: 1, idx: 1, sup: 1, smi: 1, txt: 1 };
+
+// A title contributes a language only from its last few words, and only for
+// full language names ("English", "hindi"). Sidecars name their language near
+// the end ("Show.S01E01.eng.srt"), but those codes arrive in the lang field
+// anyway — mpv parses them out of the filename itself — and a short token is
+// too easy to collide with the title's own words: "Ben" is a name, not
+// Bengali, and "It" is a film, not Italian. The words before the window are
+// the show's own name and never contribute.
+var TITLE_LANG_WINDOW = 4;
+function titleLangCodes(text) {
+  var toks = String(text == null ? "" : text).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  if (toks.length && SUB_EXT_TOKENS[toks[toks.length - 1]]) toks.pop();
+  var start = Math.max(0, toks.length - TITLE_LANG_WINDOW);
+  var out = {};
+  for (var i = start; i < toks.length; i++) {
+    if (toks[i].length < 4) continue;
+    var c = LANG_ALIASES[toks[i]];
+    if (c) out[c] = 1;
+  }
+  return out;
+}
+
+// The canonical codes a track advertises, from its lang field and its title.
+function trackLangCodes(track) {
+  var codes = {};
+  if (!track) return codes;
+  var fromLang = canonLang(track.lang);
+  if (fromLang) codes[fromLang] = 1;
+  var fromTitle = titleLangCodes(track.title);
+  Object.keys(fromTitle).forEach(function(c) { codes[c] = 1; });
+  fromTitle = titleLangCodes(track.formattedTitle);
+  Object.keys(fromTitle).forEach(function(c) { codes[c] = 1; });
+  return codes;
+}
+
+function trackMatchesLang(track, prefs) {
+  if (!track || !prefs || !prefs.length) return false;
+  var codes = trackLangCodes(track);
+  for (var i = 0; i < prefs.length; i++) {
+    if (codes[prefs[i]]) return true;
+  }
+  return false;
+}
+
+// SDH markers, on purpose a closed list. "hi" is not one of them there: it is
+// Hindi's own code, and a file named "Movie.hi.srt" says Hindi, not
+// hearing-impaired. The contextual form is safe, though — mpv itself reads a
+// "hi" that follows a language tag ("Movie.en.hi.srt") as the
+// hearing-impaired marking — so that shape is accepted below.
+var SDH_MARKERS = /\b(sdh|hearing[ -]?impaired|hard[ -]?of[ -]?hearing|closed[ -]?captions?)\b/i;
+function sdhMarked(track) {
+  if (!track) return false;
+  var text = String(track.title || "") + " " + String(track.formattedTitle || "");
+  if (SDH_MARKERS.test(text)) return true;
+  var toks = text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  for (var i = 1; i < toks.length; i++) {
+    if (toks[i] === "hi" && LANG_ALIASES[toks[i - 1]]) return true;
+  }
+  return false;
+}
+
+// The best track for a preference list, or null when nothing matches. The
+// language is the entry requirement; with Prefer SDH on, an SDH-marked match
+// beats a plain one. Only reads — the caller decides whether to switch.
+function pickTrack(tracks, prefs, sdh) {
+  var list = Array.isArray(tracks) ? tracks : [];
+  var best = null, bestSdh = false;
+  for (var i = 0; i < list.length; i++) {
+    var t = list[i];
+    if (!t || !trackMatchesLang(t, prefs)) continue;
+    var marked = !!(sdh && sdhMarked(t));
+    if (best === null || (marked && !bestSdh)) {
+      best = t;
+      bestSdh = marked;
+    }
+  }
+  return best;
+}
+
+function selectedTrack(tracks) {
+  var list = Array.isArray(tracks) ? tracks : [];
+  for (var i = 0; i < list.length; i++) {
+    if (list[i] && list[i].isSelected) return list[i];
+  }
+  return null;
+}
+
+function trackList(kind) {
+  try {
+    var mod = (kind === "audio") ? core.audio : core.subtitle;
+    if (mod && Array.isArray(mod.tracks)) return mod.tracks;
+  } catch (e) {}
+  // mpv's own list, for a build whose core module is not wired up. The names
+  // are mapped onto IINA's Track fields, which is what the rest of this
+  // section reads.
+  try {
+    var list = iina.mpv.getNative("track-list");
+    if (!Array.isArray(list)) return [];
+    var want = (kind === "audio") ? "audio" : "sub";
+    var out = [];
+    list.forEach(function(t) {
+      if (!t || t.type !== want) return;
+      out.push({
+        id: t.id,
+        title: typeof t.title === "string" ? t.title : null,
+        formattedTitle: typeof t.title === "string" ? t.title : "",
+        lang: t.lang || null,
+        codec: t.codec || null,
+        isSelected: !!t.selected,
+        isExternal: !!t.external,
+        isDefault: !!t.default,
+        isForced: !!t.forced
+      });
+    });
+    return out;
+  } catch (e) { return []; }
+}
+
+// IINA's core API first; mpv's aid/sid as the fallback for a build where the
+// core module is not wired up.
+function selectTrack(kind, id) {
+  try {
+    var mod = (kind === "audio") ? core.audio : core.subtitle;
+    if (mod) { mod.id = id; return true; }
+  } catch (e) {}
+  try {
+    iina.mpv.set(kind === "audio" ? "aid" : "sid", id);
+    return true;
+  } catch (e2) {
+    iina.console.log("[EpInfo] " + kind + " track switch failed: " + errStr(e2));
+    return false;
+  }
+}
+
+// True once nothing is left to wait for — no preference, no match, or the
+// switch is done. False only while the track list is still empty: the caller
+// retries a bounded number of times because a file's tracks are not always
+// listed at the instant it loads.
+function applyAudioPrefs() {
+  if (!audioLangPrefs.length) return true;
+  var tracks = trackList("audio");
+  if (!tracks.length) return false;
+  var current = selectedTrack(tracks);
+  if (current && trackMatchesLang(current, audioLangPrefs)) return true;
+  var pick = pickTrack(tracks, audioLangPrefs, false);
+  if (!pick || (current && current.id === pick.id)) return true;
+  if (selectTrack("audio", pick.id)) {
+    iina.console.log("[EpInfo] audio track \u2192 " +
+      (pick.title || pick.lang || ("track " + pick.id)));
+  }
+  return true;
+}
+
+function applySubPrefs() {
+  if (!subLangPrefs.length) return true;
+  var tracks = trackList("subtitle");
+  if (!tracks.length) return false;
+  var current = selectedTrack(tracks);
+
+  // The right language is already in play. SDH is the only reason to move,
+  // and only when an SDH-marked match actually exists.
+  if (current && trackMatchesLang(current, subLangPrefs)) {
+    if (!preferSdh || sdhMarked(current)) return true;
+    var sdhPick = pickTrack(tracks, subLangPrefs, true);
+    if (!sdhPick || sdhPick.id === current.id || !sdhMarked(sdhPick)) return true;
+    if (selectTrack("subtitle", sdhPick.id)) {
+      iina.console.log("[EpInfo] subtitle track \u2192 " +
+        (sdhPick.title || sdhPick.lang || ("track " + sdhPick.id)));
+    }
+    return true;
+  }
+
+  var pick = pickTrack(tracks, subLangPrefs, preferSdh);
+  if (!pick) return true;
+  if (selectTrack("subtitle", pick.id)) {
+    iina.console.log("[EpInfo] subtitle track \u2192 " +
+      (pick.title || pick.lang || ("track " + pick.id)));
+  }
+  return true;
+}
+
+var TRACK_PICK_MAX_TRIES = 10;   // 30s of the 3s poll
+function trackPrefsStep() {
+  if (!trackPickPending) return;
+  trackPickTries++;
+  var audioDone = applyAudioPrefs();
+  var subDone = applySubPrefs();
+  if ((audioDone && subDone) || trackPickTries >= TRACK_PICK_MAX_TRIES) {
+    trackPickPending = false;
+  }
+}
+
+
 // ── Subtitle tag scan ─────────────────────────────────────────
 // External text subtitles only: IINA's file API cannot reach tracks inside
 // the container (verified: "Cannot find the file path of track @sub/N.
@@ -1705,11 +1992,14 @@ function subtitleKeySlug(k) {
   return String(k).replace(/[^A-Za-z0-9_-]/g, "-");
 }
 
-function subtitleCachePath(info) {
+function subtitleCachePath(info, sdh) {
   var k = subtitleEpisodeKey(info);
+  if (!k) return "";
   // The write time is baked into the name: the file API exposes no
   // modification time, so this is what lets the cache be bounded later.
-  return k ? ("@data/sidekick-sub-" + subtitleKeySlug(k) + "--" + Date.now() + ".srt") : "";
+  // The SDH marker rides in the name the same way, and is how the loader
+  // knows a remembered copy is the hearing-impaired one without any store.
+  return "@data/sidekick-sub-" + subtitleKeySlug(k) + "--" + (sdh ? "sdh--" : "") + Date.now() + ".srt";
 }
 
 // The name of a file from iina.file.list, whatever the entry calls it. The
@@ -1734,37 +2024,51 @@ function listDataFiles() {
   }
 }
 
-// The cached copy for this episode, newest-epoch file winning, with the
-// fixed-name form from before the epoch naming as a fallback so copies
-// written by an older build keep working until they are rewritten.
-function cachedSubtitlePath(info) {
+// The cached copy for this episode. The newest epoch wins; with Prefer SDH
+// on, an SDH-marked copy beats a newer plain one, because the plain copy may
+// predate the SDH download entirely. The fixed-name form from before the
+// epoch naming is the fallback, so copies written by an older build keep
+// working until they are rewritten. Returns { path, sdh }; an empty path
+// means there is no copy.
+function cachedSubtitlePath(info, wantSdh) {
   var k = subtitleEpisodeKey(info);
-  if (!k) return "";
+  if (!k) return { path: "", sdh: false };
   var prefix = "sidekick-sub-" + subtitleKeySlug(k) + "--";
   try {
     if (typeof iina.file.list === "function") {
       // Newest, not first: the comment above promised this and the loop did
       // not do it, so which copy was loaded depended on list order.
-      var files = listDataFiles(), best = "", bestTs = -1;
+      var files = listDataFiles();
+      var best = "", bestTs = -1, bestSdh = "", bestSdhTs = -1;
       for (var i = 0; i < files.length; i++) {
         var name = dataFileName(files[i]);
         if (name.indexOf(prefix) !== 0) continue;
-        var m = /--(\d+)\.srt$/.exec(name);
-        var ts = m ? Number(m[1]) : 0;
-        if (ts > bestTs) { bestTs = ts; best = name; }
+        var m = /--(?:sdh--)?(\d+)\.srt$/.exec(name);
+        if (!m) continue;
+        var ts = Number(m[1]);
+        if (/--sdh--\d+\.srt$/.test(name)) {
+          if (ts > bestSdhTs) { bestSdhTs = ts; bestSdh = name; }
+        } else if (ts > bestTs) {
+          bestTs = ts;
+          best = name;
+        }
       }
       // "@data/<name>" is the form iina.file.write itself accepts, so the
       // write location is known to resolve here; a relative path from the API
       // is not.
-      if (best) return "@data/" + best;
+      if (wantSdh && bestSdh) return { path: "@data/" + bestSdh, sdh: true };
+      if (best) return { path: "@data/" + best, sdh: false };
+      if (bestSdh) return { path: "@data/" + bestSdh, sdh: true };
     }
     var legacy = "@data/sidekick-sub-" + subtitleKeySlug(k) + ".srt";
-    if (typeof iina.file.exists === "function" && iina.file.exists(legacy)) return legacy;
+    if (typeof iina.file.exists === "function" && iina.file.exists(legacy)) {
+      return { path: legacy, sdh: false };
+    }
   } catch (e) {}
-  return "";
+  return { path: "", sdh: false };
 }
 
-function rememberSubtitle(info, text) {
+function rememberSubtitle(info, text, sdh) {
   if (!text || typeof text !== "string") return;
   var k = subtitleEpisodeKey(info);
   if (!k) return;
@@ -1782,7 +2086,7 @@ function rememberSubtitle(info, text) {
         }
       });
     }
-    iina.file.write(subtitleCachePath(info), text);
+    iina.file.write(subtitleCachePath(info, sdh), text);
   } catch (e) { /* caching is best-effort */ }
 }
 
@@ -1794,7 +2098,7 @@ function subtitleFilesToPrune(files, cap) {
   var mine = [];
   (Array.isArray(files) ? files : []).forEach(function(f) {
     var name = dataFileName(f);
-    var m = /^sidekick-sub-(.+?)--(\d+)\.srt$/.exec(name);
+    var m = /^sidekick-sub-(.+?)--(?:sdh--)?(\d+)\.srt$/.exec(name);
     // Deleted by the "@data/<name>" form the writer uses, not by whatever the
     // listing called the path.
     if (m) mine.push({ path: "@data/" + name, ts: Number(m[2]) });
@@ -1850,7 +2154,7 @@ function scanSubtitlesNow() {
     }
     if (currentEpisode) {
       subtitleScanDone[subtitleEpisodeKey(currentEpisode)] = true;
-      rememberSubtitle(currentEpisode, text);
+      rememberSubtitle(currentEpisode, text, sdhMarked(track));
     }
     sidebar.postMessage("subScanResult", {
       ok: true,
@@ -1895,7 +2199,7 @@ function autoScanStep() {
     // Marked done only after a successful read, so a track whose file is not
     // ready yet is retried on the next poll.
     subtitleScanDone[epKey] = true;
-    rememberSubtitle(currentEpisode, text);
+    rememberSubtitle(currentEpisode, text, sdhMarked(track));
     sidebar.postMessage("subScanResult", {
       ok: true,
       auto: true,
@@ -1907,20 +2211,29 @@ function autoScanStep() {
 }
 
 // Load the remembered copy when the user has no external subtitle of their
-// own selected. loadTrack does not report failure, so the result is verified
-// a moment later: if no external track appeared, the sidebar is told, because
-// a manual load is the workaround and the storage location can then change.
+// own selected — or, with Prefer SDH on, when the copy is SDH-marked and the
+// track in play is not. loadTrack does not report failure, so the result is
+// verified a moment later: if no external track appeared, the sidebar is
+// told, because a manual load is the workaround and the storage location can
+// then change.
 function tryLoadCachedSubtitle() {
   try {
     if (!dddEnabled || !currentEpisode) return;
     if (!iina.file || (typeof iina.file.exists !== "function" && typeof iina.file.list !== "function")) return;
-    var p = cachedSubtitlePath(currentEpisode);
-    if (!p) return;
+    var cached = cachedSubtitlePath(currentEpisode, preferSdh);
+    if (!cached.path) return;
     var tracks = [];
     try { tracks = core.subtitle.tracks || []; } catch (e) {}
-    var hasExternal = false;
-    tracks.forEach(function(t) { if (t.isExternal) hasExternal = true; });
-    if (hasExternal) return;   // the user's own choice stays untouched
+    var selected = null, hasExternal = false;
+    tracks.forEach(function(t) {
+      if (t && t.isSelected) selected = t;
+      if (t && t.isExternal) hasExternal = true;
+    });
+    // The user's own choice stays untouched, with one exception: Prefer SDH
+    // is on, the remembered copy is SDH-marked, and nothing SDH-marked is in
+    // play. Then the copy is what they asked for.
+    var wanted = preferSdh && cached.sdh && !sdhMarked(selected);
+    if (hasExternal && !wanted) return;
     if (typeof core.subtitle.loadTrack !== "function") return;
     var before = tracks.length;
     // Tied to the episode it was started for: a file change inside the 2.5s
@@ -1928,8 +2241,8 @@ function tryLoadCachedSubtitle() {
     // then, and the sidebar offers a manual load over a subtitle that may be
     // loading fine.
     var key = subtitleEpisodeKey(currentEpisode);
-    core.subtitle.loadTrack(p);
-    log("loading cached subtitle " + p);
+    core.subtitle.loadTrack(cached.path);
+    log("loading cached subtitle " + cached.path);
     setTimeout(function() {
       try {
         if (!currentEpisode || subtitleEpisodeKey(currentEpisode) !== key) return;
@@ -1938,7 +2251,7 @@ function tryLoadCachedSubtitle() {
         var ext = false;
         now.forEach(function(t) { if (t.isExternal && SUBTITLE_TEXT_CODECS[t.codec]) ext = true; });
         if (!ext && now.length <= before) {
-          log("cached subtitle did not appear after loadTrack: " + p);
+          log("cached subtitle did not appear after loadTrack: " + cached.path);
           sidebar.postMessage("subScanResult", { ok: false, reason: "autoload-failed", auto: true });
         }
       } catch (e) {}
@@ -1948,8 +2261,13 @@ function tryLoadCachedSubtitle() {
     sidebar.postMessage("subScanResult", { ok: false, reason: "autoload-failed", auto: true });
   }
 }
-// The poll is what notices a subtitle downloaded while the file is playing.
-setInterval(autoScanStep, 3000);
+// The poll is what notices a subtitle downloaded while the file is playing,
+// and is also the retry for a new file whose track list was not populated yet
+// when the language/SDH selection first ran.
+setInterval(function() {
+  autoScanStep();
+  trackPrefsStep();
+}, 3000);
 
 
 // The window title, the macOS media panel and IINA's playlist all read
@@ -2224,6 +2542,19 @@ function registerSidebarHandlers() {
     log("Scene warnings " + (dddEnabled ? "enabled" : "disabled"));
   });
 
+  // The sidebar's preferred audio/subtitle languages and its SDH preference.
+  // A change re-answers the file that is playing, because the user just asked
+  // for it; at boot the values arrive before any file, and the apply runs at
+  // each file-loaded anyway.
+  sidebar.onMessage("setTrackPrefs", function(d) {
+    audioLangPrefs = parseLangPref(d && d.audio);
+    subLangPrefs   = parseLangPref(d && d.subs);
+    preferSdh      = !!(d && d.sdh);
+    trackPickPending = true;
+    trackPickTries = 0;
+    trackPrefsStep();
+  });
+
   // Sidebar finished its init and is ready to receive messages.
   // Re-emit the current file's URL so it can do its URL→episode lookup
   //. The original fileChanged from file-loaded may have
@@ -2317,6 +2648,22 @@ event.on("iina.file-loaded", function() {
   sidebar.postMessage("fileChanged", { url: currentVideoUrl });
   sidebar.postMessage("overlayStatus", { text: "Select an episode, then pause" });
   setupSidebar();
+  // The preferred language/SDH selection. The track list is not always
+  // populated the instant this event fires, so this is the first of a
+  // bounded series of attempts; file-started and the 3s poll carry the rest.
+  trackPickPending = true;
+  trackPickTries = 0;
+  trackPrefsStep();
+});
+
+// The track list can be complete here even when it was not at file-loaded.
+// Run the selection again from a fresh window: if IINA or mpv re-picked a
+// track between the two events, the answer from file-loaded would otherwise
+// stand only until the next open.
+event.on("iina.file-started", function() {
+  trackPickPending = true;
+  trackPickTries = 0;
+  trackPrefsStep();
 });
 
 // Show the card if the video is sitting paused. Identification finishes

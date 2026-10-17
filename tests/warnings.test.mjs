@@ -1177,7 +1177,7 @@ test("a successful scan caches the subtitle for the next open", () => {
   m.fromWebView("sidebar", "setDddEnabled", { enabled: true });
   m.fromWebView("sidebar", "episodeSelected", EPISODE);
   assert.equal(writes.length, 1, "the scanned subtitle was not cached");
-  assert.match(writes[0][0], /^@data\/sidekick-sub-1399-1-2--\d+\.srt$/,
+  assert.match(writes[0][0], /^@data\/sidekick-sub-1399-1-2--sdh--\d+\.srt$/,
     `cache path was ${writes[0][0]}`);
   assert.equal(writes[0][1], SRT);
   assert.deepEqual(deletes, ["@data/sidekick-sub-1399-1-2--111.srt"],
@@ -1888,19 +1888,25 @@ test("the scan failures explain themselves in the status line", () => {
 test("the newest cached subtitle is the one that resolves", () => {
   // The loop returned the first match, whatever order the listing came in,
   // though the comment promised newest-wins. The entries also carry the name
-  // in whichever field the API happens to use.
+  // in whichever field the API happens to use. The SDH marker in the name is
+  // returned with the path: the loader uses it to prefer the SDH copy.
   const m = loadMain({
     status: { paused: false, duration: 4000, url: "file:///v/a.mkv" },
     file: {
       list: () => [
         { name: "sidekick-sub-1399-1-2--100.srt" },     // oldest, listed first
         { path: "sidekick-sub-1399-1-2--300.srt" },
-        { filename: "sidekick-sub-1399-1-2--200.srt" }
+        { filename: "sidekick-sub-1399-1-2--sdh--200.srt" }
       ]
     }
   });
-  assert.equal(m.global.cachedSubtitlePath({ tmdbId: 1399, season: 1, episode: 2 }),
-    "@data/sidekick-sub-1399-1-2--300.srt");
+  const plain = m.global.cachedSubtitlePath({ tmdbId: 1399, season: 1, episode: 2 });
+  assert.equal(plain.path, "@data/sidekick-sub-1399-1-2--300.srt");
+  assert.equal(plain.sdh, false);
+  const sdhPick = m.global.cachedSubtitlePath({ tmdbId: 1399, season: 1, episode: 2 }, true);
+  assert.equal(sdhPick.path, "@data/sidekick-sub-1399-1-2--sdh--200.srt",
+    "Prefer SDH did not pick the SDH copy over a newer plain one");
+  assert.equal(sdhPick.sdh, true);
 });
 
 test("the mpv seek fallback uses one combined flags argument", () => {

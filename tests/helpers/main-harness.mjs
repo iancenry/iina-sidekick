@@ -112,6 +112,7 @@ export function loadMain(opts = {}) {
       getNumber(name) { return typeof mpvProps[name] === "number" ? mpvProps[name] : 0; },
       getString(name) { return typeof mpvProps[name] === "string" ? mpvProps[name] : ""; },
       getBool(name, def) { return typeof mpvProps[name] === "boolean" ? mpvProps[name] : !!def; },
+      getNative(name) { return (opts.mpvNative || {})[name]; },
       set(name, value) { sink.mpvSet[name] = value; },
       command(name, args) { sink.mpvCommands.push([name, args]); },
       observeProperty() {},
@@ -150,8 +151,11 @@ export function loadMain(opts = {}) {
       osd() {},
       getPassword() { return Promise.resolve(""); },
       // The subtitle scanner reads core.subtitle.tracks and .delay, and the
-      // file text arrives through iina.file.read (see `file` below).
-      subtitle: Object.assign({ tracks: [], delay: 0 }, opts.subtitle || {})
+      // file text arrives through iina.file.read (see `file` below). The
+      // language/SDH selection reads both track lists and writes .id on them
+      // (with mpv aid/sid as the fallback).
+      subtitle: Object.assign({ tracks: [], delay: 0, id: null }, opts.subtitle || {}),
+      audio: Object.assign({ tracks: [], id: null }, opts.audio || {})
     },
     // Read through a thunk rather than capturing the value, so a test can flip
     // the gate after the proxy has been built.

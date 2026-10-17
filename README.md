@@ -121,6 +121,23 @@ The window title, the macOS media panel and IINA's playlist read mpv's
 `media-title`, so they show `Severance · In Perpetuity` instead of echoing
 `Severance.S02E03.1080p.WEB-DL.DDP5.1.H.264-NTb.mkv`.
 
+### Picks your language
+
+A preferred audio and subtitle language can be set in the sidebar. A file that
+opens on the wrong one — a Hindi default in an English household is the case
+this exists for — is switched to a track matching the preference. A track that
+already matches is left alone, and so is one you picked yourself mid-file.
+Names and codes both work (`english`, `eng`, `en`), and empty fields mean off.
+
+**Prefer SDH** makes a hearing-impaired subtitle track win over a plain one of
+the same language, including the remembered copy a tag scan keeps. It is never
+confused by `hi`: a bare `hi` is Hindi's own code, and only `hi` after a
+language tag (`Movie.en.hi.srt`) is read as a hearing-impaired marker.
+
+Choosing only ever looks at the tracks the file and its sidecars already have,
+so nothing new is contacted. Downloading subtitles stays with IINA's own
+OpenSubtitles integration.
+
 ### What it contacts
 
 Three permissions: `video-overlay`, `network-request`, and `file-system`, the

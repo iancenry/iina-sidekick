@@ -223,6 +223,45 @@ function doToggleSkip(on) {
   iina.postMessage("setSkipEnabled", { enabled: on });
 }
 
+// ── Preferred language & SDH ──────────────────────────────────
+function paintSdhToggle(on) {
+  var box = document.getElementById("sdh-toggle");
+  var tr  = document.getElementById("sdh-track");
+  var th  = document.getElementById("sdh-thumb");
+  if (box) box.checked = on;
+  if (tr) tr.style.background = on ? "rgba(48,209,88,.85)" : "rgba(255,255,255,.2)";
+  if (th) th.style.left = on ? "21px" : "3px";
+}
+
+// One message carries all three settings: main.js re-applies the whole
+// selection when any of them changes, and a per-field message would apply
+// half-changed state three times.
+function pushTrackPrefs() {
+  var audio = "", subs = "", sdh = false;
+  try {
+    audio = localStorage.getItem("epinfo_audio_lang") || "";
+    subs  = localStorage.getItem("epinfo_sub_lang") || "";
+    sdh   = localStorage.getItem("epinfo_sdh") === "true";
+  } catch (e) {}
+  iina.postMessage("setTrackPrefs", { audio: audio, subs: subs, sdh: sdh });
+}
+
+function doSetAudioLang(val) {
+  try { localStorage.setItem("epinfo_audio_lang", String(val || "").trim()); } catch (e) {}
+  pushTrackPrefs();
+}
+
+function doSetSubLang(val) {
+  try { localStorage.setItem("epinfo_sub_lang", String(val || "").trim()); } catch (e) {}
+  pushTrackPrefs();
+}
+
+function doToggleSdh(on) {
+  try { localStorage.setItem("epinfo_sdh", on ? "true" : "false"); } catch (e) {}
+  paintSdhToggle(on);
+  pushTrackPrefs();
+}
+
 // ── Scene content warnings (DoesTheDogDie) ───────────────────
 function paintDddToggle(on) {
   var box = document.getElementById("ddd-toggle");

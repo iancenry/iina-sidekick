@@ -23,6 +23,18 @@
     paintSkipToggle(sk);
     iina.postMessage("setSkipEnabled", { enabled: sk });
 
+    // Preferred language and SDH, from the Language section. Empty values
+    // leave track selection entirely to IINA and mpv, which is the default.
+    var al = localStorage.getItem("epinfo_audio_lang") || "";
+    var sl = localStorage.getItem("epinfo_sub_lang") || "";
+    var sdh = localStorage.getItem("epinfo_sdh") === "true";
+    var alEl = document.getElementById("audio-lang-input");
+    var slEl = document.getElementById("sub-lang-input");
+    if (alEl) alEl.value = al;
+    if (slEl) slEl.value = sl;
+    paintSdhToggle(sdh);
+    iina.postMessage("setTrackPrefs", { audio: al, subs: sl, sdh: sdh });
+
     // Scene warnings: the second key and the second opt-in, also off by
     // default. Pushed after the skip pair so the two features are set up in
     // the same order the sidebar shows them.
