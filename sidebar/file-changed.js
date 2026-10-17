@@ -1,4 +1,15 @@
 // ── File changed ──────────────────────────────────────────────
+// A season or an episode as the staleness comparison needs it. Null stays
+// null — a season pack names no episode, and a saved episode number must not
+// be compared against a zero it never was — while a stored string ("2") and a
+// stored number (2) compare equal, because a hand-edited entry is not the
+// only way a string gets in there.
+function codeNum(v) {
+  if (v === null || v === undefined || v === "") return null;
+  var n = Number(v);
+  return isNaN(n) ? null : n;
+}
+
 // URL-aware. A URL we've already identified restores instantly, but only
 // if the remembered episode still agrees with the filename. A stale entry
 // (typically a mis-pick saved against the wrong file) is re-identified
@@ -37,8 +48,31 @@ iina.onMessage("fileChanged", function(d){
   var stale = false;
   if (saved) {
     if (now && now.code) {
-      stale = Number(saved.season || 0)  !== now.code.season ||
-              Number(saved.episode || 0) !== now.code.episode;
+      // Compared against what the filename claimed when the entry was written,
+      // where the entry records it. A season the user corrected by hand, or
+      // one a pinned folder supplied, is not evidence that this is a different
+      // file: comparing against the saved pick re-identified the correction on
+      // every return, and it could never be kept. Entries written before the
+      // field existed fall back to the saved pick and are re-identified once,
+      // exactly as they are for absoluteFrom.
+      var refSeason  = saved.parsedSeason === undefined ? saved.season : saved.parsedSeason;
+      var refEpisode = saved.parsedEpisode === undefined ? saved.episode : saved.parsedEpisode;
+      stale = codeNum(refSeason)  !== codeNum(now.code.season) ||
+              codeNum(refEpisode) !== codeNum(now.code.episode);
+      // An entry filed under a season the folder disagrees with cannot be
+      // trusted either, where the filename never said which season it was: the
+      // folder's season is what the entry should have, and a disagreement means
+      // it was written before the pin existed, or under a pick that has since
+      // been replaced. A pick made by hand rewrites the pin, so a correction
+      // the user made never lands here; this is what retires an episode saved
+      // as the wrong one of the two.
+      if (!stale && !now.code.seasonFromName && !now.code.seasonFromFolder) {
+        var folderPin = pinForUrl(currentVideoUrl);
+        if (folderPin && folderPin.show.season &&
+            Number(folderPin.show.season) !== Number(saved.season)) {
+          stale = true;
+        }
+      }
     } else if (now && now.absolute) {
       // An absolute number is ground truth for the episode too, but S21E62
       // cannot be compared with "[1062-1063]" without the show's season totals,

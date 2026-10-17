@@ -233,8 +233,9 @@ test("the anime E-marker is an episode number", () => {
   const p = parsed("Naruto.Shippuuden.E484.720p.Bia2Anime.mkv");
   assert.equal(p.code.season, 1);
   assert.equal(p.code.episode, 484);
-  // …and the marker is not left behind to pollute the search.
-  assert.equal(p.title, "Naruto Shippuuden Bia2Anime");
+  // …and the marker is not left behind to pollute the search. The release
+  // group follows the code, so it is no longer part of the title either.
+  assert.equal(p.title, "Naruto Shippuuden");
 });
 
 test("a four-digit E-marker is still an episode", () => {
@@ -505,8 +506,10 @@ test("previously working names are unaffected", () => {
     ["The.Office.US.S09E16.720p.HDTV.x264.mkv", "The Office US", [9, 16]],
     ["Show.Name.1x05.avi", "Show Name", [1, 5]],
     ["Doctor Who Season 2 Episode 7.mkv", "Doctor Who", [2, 7]],
-    ["Naruto.Shippuuden.E484.720p.Bia2Anime.mkv", "Naruto Shippuuden Bia2Anime", [1, 484]],
-    ["AnimePahe_Nippon_Sangoku_-_05_1080p_Amazon.mp4", "AnimePahe Nippon Sangoku - 05 Amazon", [1, 5]],
+    ["Naruto.Shippuuden.E484.720p.Bia2Anime.mkv", "Naruto Shippuuden", [1, 484]],
+    // The code is mid-name here, and the service tag follows it, so both come
+    // off and the title is the name in front of them.
+    ["AnimePahe_Nippon_Sangoku_-_05_1080p_Amazon.mp4", "AnimePahe Nippon Sangoku", [1, 5]],
     ["[SubsPlease] Frieren - 05 (1080p).mkv", "Frieren", [1, 5]],
     ["Band_of_Brothers_S01E04.mkv", "Band of Brothers", [1, 4]],
     ["500.Days.of.Summer.2009.mkv", "500 Days of Summer", null],

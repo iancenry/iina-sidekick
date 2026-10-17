@@ -142,11 +142,15 @@ test("a cached entry that disagrees with the filename is re-identified", async (
   const url = "file:///Users/me/Videos/Severance.S02E03.mkv";
   await identify(h, url);
 
-  // Same URL, but the cache now claims a different episode. The filename is
+  // Same URL, but the entry was built from a different number: the filename is
   // ground truth, so the stale entry must be replaced rather than replayed.
+  // Rewriting what the entry records the filename as having said is what makes
+  // it an entry for another file — a pick the user corrected by hand leaves
+  // that field alone, and is kept (see the test below).
   const map = JSON.parse(h.localStorage.getItem("epinfo_url_map"));
   map[url].episode = 1;
   map[url].code = "S02E01";
+  map[url].parsedEpisode = 1;
   h.localStorage.setItem("epinfo_url_map", JSON.stringify(map));
 
   // Come back to the file the way a playlist does: play something else in
@@ -159,6 +163,151 @@ test("a cached entry that disagrees with the filename is re-identified", async (
   await settle();
   assert.ok(h.fetchCalls.length > before, "stale entry was replayed instead of re-identified");
   assert.equal(episodeSelected(h).code, "S02E03");
+});
+
+test("an entry written before the parse was recorded is re-identified once", async () => {
+  const h = boot();
+  const url = "file:///Users/me/Videos/Severance.S02E03.mkv";
+  await identify(h, url);
+
+  // An entry from a build that did not record the parse. It cannot be checked
+  // against the file it was built from, so it is rebuilt once — exactly as an
+  // entry with no absoluteFrom is.
+  const map = JSON.parse(h.localStorage.getItem("epinfo_url_map"));
+  delete map[url].parsedSeason;
+  delete map[url].parsedEpisode;
+  map[url].episode = 1;
+  map[url].code = "S02E01";
+  h.localStorage.setItem("epinfo_url_map", JSON.stringify(map));
+
+  h.iina._emit("fileChanged", { url: "file:///v/Some Other Film 2019.mkv" });
+  await settle();
+  const before = h.fetchCalls.length;
+  h.iina._emit("fileChanged", { url });
+  await settle();
+  assert.ok(h.fetchCalls.length > before, "an unchecked entry was replayed");
+  assert.equal(episodeSelected(h).code, "S02E03", "the entry was not rebuilt");
+
+  // And only once: the rebuilt entry records the parse, so the next return is
+  // a restore rather than another round trip.
+  h.iina._emit("fileChanged", { url: "file:///v/Some Other Film 2019.mkv" });
+  await settle();
+  const after = h.fetchCalls.length;
+  h.iina._emit("fileChanged", { url });
+  await settle();
+  assert.equal(h.fetchCalls.length, after, "the rebuilt entry was re-identified again");
+  assert.equal(episodeSelected(h).code, "S02E03");
+});
+
+test("a season pack's entry is not stale for naming no episode", async () => {
+  // The filename names a season and no episode, so the entry has an episode
+  // number the filename does not. Comparing the two directly made the entry
+  // stale on every return, because a missing episode read as zero.
+  const h = boot();
+  const url = "file:///Users/me/Videos/Severance.S02.COMPLETE.1080p.mkv";
+  await identify(h, url);
+  assert.equal(h.global.currentParsed.code.episode, null, "the fixture should name no episode");
+
+  // What a manual pick of the first episode saves for it.
+  h.global.currentVideoUrl = url;
+  h.global.parseFilename(url);
+  h.global.selShow = { id: 1399, name: "Severance", _name: "Severance" };
+  h.global.selSeason = 2;
+  h.global.episodeCache = [SEASON_2.episodes[0]];
+  h.global.pickEp(0, false);
+  await settle();
+  assert.equal(episodeSelected(h).code, "S02E01");
+
+  h.iina._emit("fileChanged", { url: "file:///v/Some Other Film 2019.mkv" });
+  await settle();
+  const before = h.fetchCalls.length;
+  h.iina._emit("fileChanged", { url });
+  await settle();
+  assert.equal(h.fetchCalls.length, before, "a season pack's own entry was re-identified");
+  assert.equal(episodeSelected(h).code, "S02E01");
+});
+
+test("a season the user corrected by hand survives a replay", async () => {
+  const h = boot();
+  const url = "file:///Users/me/Videos/Severance.S02E03.mkv";
+  await identify(h, url);
+
+  // The pick named a different season and episode than the filename did. That
+  // disagreement is the correction, not a stale entry: the comparison is
+  // against what the filename claimed when the pick was made, and re-identifying
+  // here rebuilt S02E03 and threw the correction away on every return.
+  const map = JSON.parse(h.localStorage.getItem("epinfo_url_map"));
+  map[url].season = 1;
+  map[url].episode = 2;
+  map[url].code = "S01E02";
+  h.localStorage.setItem("epinfo_url_map", JSON.stringify(map));
+
+  h.iina._emit("fileChanged", { url: "file:///v/Some Other Film 2019.mkv" });
+  await settle();
+  const before = h.fetchCalls.length;
+  h.iina._emit("fileChanged", { url });
+  await settle();
+  assert.equal(h.fetchCalls.length, before, "the corrected entry was re-identified");
+  assert.equal(episodeSelected(h).code, "S01E02");
+});
+
+test("the episode's own title is never searched for", async () => {
+  // The filename carries the episode's title after its code. Asking TMDB about
+  // all of those words returned nothing at all, six times over, while the
+  // show's own name — the two-word prefix — was past the ladder's budget. The
+  // title stops at the code now, so the first question asked is the show.
+  const h = boot({
+    routes: {
+      "/3/search/tv": (url) => /query=Hells%20Paradise$/.test(url)
+        ? { results: [{ id: 1399, name: "Hell's Paradise", vote_count: 900, poster_path: "/hp.jpg" }] }
+        : { results: [] },
+      "/3/tv/1399": { id: 1399, name: "Hell's Paradise", seasons: [{ season_number: 1, episode_count: 13 }], images: {} },
+      "/3/tv/1399/season/1": {
+        poster_path: "",
+        episodes: [{ episode_number: 1, name: "The Death Row Convict and the Executioner", air_date: "2023-04-01" }]
+      }
+    }
+  });
+  const started = await identify(h, "file:///Users/me/Videos/"
+    + "Hells.Paradise.S01E01.The.Death.Row.Convict.and.the.Executioner.1080p.CR.WEB-DL.AAC2.0.H.264-HDC.mkv");
+  assert.equal(started, true);
+
+  const info = episodeSelected(h);
+  assert.ok(info, "nothing was selected");
+  assert.equal(info.showTitle, "Hell's Paradise");
+  assert.equal(info.code, "S01E01");
+  // One question, and it is the show's name.
+  assert.deepEqual(searchedQueries(h.fetchCalls).filter(Boolean), ["Hells Paradise"]);
+});
+
+test("a folder-per-cour layout identifies from the directory", async () => {
+  // "megalobox/1/EP.1.720p.mp4": the marker is the whole filename, so the show
+  // is in the directory and the season is in the folder above the file. Both
+  // were being missed — "EP 1" was searched for as a title.
+  const h = boot({
+    routes: {
+      "/3/search/tv": (url) => /query=megalobox$/.test(url)
+        ? { results: [{ id: 80787, name: "MEGALOBOX", vote_count: 300, poster_path: "/mb.jpg" }] }
+        : { results: [] },
+      "/3/tv/80787": {
+        id: 80787, name: "MEGALOBOX",
+        seasons: [{ season_number: 1, episode_count: 13 }, { season_number: 2, episode_count: 13 }],
+        images: {}
+      },
+      "/3/tv/80787/season/1": {
+        poster_path: "",
+        episodes: [{ episode_number: 1, name: "Buy or Die", air_date: "2018-04-06" }]
+      }
+    }
+  });
+  const started = await identify(h, "file:///Volumes/Transcend/movies/anime/megalobox/1/EP.1.720p.mp4");
+  assert.equal(started, true);
+
+  const info = episodeSelected(h);
+  assert.ok(info, "nothing was selected");
+  assert.equal(info.showTitle, "MEGALOBOX");
+  assert.equal(info.code, "S01E01");
+  assert.deepEqual(searchedQueries(h.fetchCalls).filter(Boolean), ["megalobox"]);
 });
 
 test("every request goes to a host declared in Info.json", async () => {

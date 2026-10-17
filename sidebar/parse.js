@@ -98,7 +98,9 @@ var words = letters.split(" ").filter(function(w) { return w; });
     var raw = words[words.length - 1];
     var last = raw.toLowerCase().replace(/[^\w]/g, "");
     if (!/[a-z0-9]/i.test(raw)) { words.pop(); continue; }
-    if (!TRAILING_JUNK[last] && !/^\d{1,3}$/.test(last)) break;
+    // A version suffix is not part of a title: "EP.13.v0.720p" left "v0" as
+    // the whole title, and the folder's own name was never consulted.
+    if (!TRAILING_JUNK[last] && !/^\d{1,3}$/.test(last) && !/^v\d{1,2}$/.test(last)) break;
     // A bare number is a leftover from a tag ("WEB- 1", "Frieren - 05") or a
     // padded counter ("Egghead 04") — but it can also be part of the title,
     // and dropping the 19 of "Station 19" or the 3 of "Spider-Man 3" left a
@@ -133,7 +135,12 @@ function fileNameFromUrl(url) {
 }
 
 // "Show Name S01E02" → {season:1, episode:2}
-function parseEpisodeCode(base) {
+//
+// Returns the code together with the text that precedes it, because in every
+// convention that writes a code, what follows it belongs to the episode — its
+// own title, then the release tags — and what precedes it is the show's name.
+// See the head note in parseFilename for why that matters.
+function episodeCodeMatch(base) {
   // seasonFromName records whether the season was actually written in the
   // filename or merely assumed. The absolute-number convention carries no
   // season at all, and for "Show/Season 2/05.mkv" the directory is a better
@@ -162,7 +169,12 @@ function parseEpisodeCode(base) {
     // "Naruto.Shippuuden.E484.720p", the anime convention of marking the episode
     // with a bare E and no season. Four digits, because long-running series
     // pass 999: One Piece is into the 1100s.
-    { re: /(?:^|[\s._-])E(\d{1,4})(?:[\s._-]|$)/i,
+    //
+    // "EP.1.720p.mp4" and "Episode.5.mkv" are the same marker spelled out, and
+    // are how a library that puts each cour in its own directory names its
+    // files ("megalobox/1/EP.1.720p.mp4"). Longest spelling first, so EPISODE
+    // is not read as EP followed by "ISODE".
+    { re: /(?:^|[\s._-])(?:EPISODE|EP|E)[\s._-]*(\d{1,4})(?:[\s._-]|$)/i,
       map: function(m) { return { season:1, episode:+m[1], extra:null, seasonFromName:false, marker:"E" }; } },
     // A season with no episode in the name: a season pack, or a pack-style
     // filename ("Severance.S02.COMPLETE.1080p"). The show can still be
@@ -197,7 +209,8 @@ function parseEpisodeCode(base) {
     // at three it was read as no episode at all, which then showed One Piece
     // season 1. The year guard below is what keeps 1917 and 2019 out.
     { re: /^(.*?)[\s._-]+[-]?\s*(\d{1,4})(?:v\d)?$/i,
-      map: function(m) { return { season:1, episode:+m[2], extra:null, seasonFromName: false }; } }
+      map: function(m) { return { season:1, episode:+m[2], extra:null, seasonFromName: false }; },
+      trailing: true }
   ];
   for (var i = 0; i < pats.length; i++) {
     var m = base.match(pats[i].re);
@@ -218,14 +231,31 @@ function parseEpisodeCode(base) {
       // cannot quietly leave this guard pointing at the wrong one.
       if (r.episode >= 1900 && r.episode <= 2099) return null;
       if (!r.season || r.season < 0) r.season = 1;
-      return r;
+      // The head is what is in front of the code. The end-anchored pattern
+      // captures it in its own first group; every other pattern is anchored by
+      // where its match starts, and its own prefix cannot be the head because
+      // the leading delimiter is part of the match.
+      var head = pats[i].trailing ? m[1] : base.slice(0, m.index);
+      return { code: r, head: head };
     }
   }
   return null;
 }
 
+// The code alone, for callers with no use for the text in front of it.
+function parseEpisodeCode(base) {
+  var m = episodeCodeMatch(base);
+  return m ? m.code : null;
+}
+
 // Strip the episode code and everything that isn't the title.
-function cleanTitle(base, code) {
+//
+// `fragment` marks a caller handing over a piece of a name rather than a whole
+// filename — a directory segment, a bracket group, the text in front of the
+// episode code. The extension pass below is a safety net for whole filenames
+// and has no business in a fragment, where it eats the last word of a dotted
+// name: "The.Italian.Job" lost its Job, "The.Chi" lost its Chi.
+function cleanTitle(base, code, fragment) {
   // Normalise separators FIRST. Scene names are mostly underscores, and a
   // word-boundary anchor fails between "_" and "S" (both word characters), so
   // "Band_of_Brothers_S01E04" would otherwise keep its episode code in the
@@ -235,7 +265,7 @@ function cleanTitle(base, code) {
   // pass for callers that hand over a whole filename. It has to require a
   // leading letter: "Show.1062" is an episode number, and "[a-z0-9]{2,4}"
   // matched the digits and deleted the episode from the title.
-  var t = base.replace(/\.[a-z][a-z0-9]{1,3}$/i, "");
+  var t = fragment ? base : base.replace(/\.[a-z][a-z0-9]{1,3}$/i, "");
   t = t.replace(/[._]+/g, " ").replace(/\s+/g, " ").trim();
 
   // Bracket groups usually hold the noise ("[1080p]", "[SubsPlease]").
@@ -259,8 +289,9 @@ function cleanTitle(base, code) {
     }
     t = t.replace(/(?:^|[^\d])\d{1,2}x\d{1,3}(?:\s*[-\s]\s*\d{1,3})?(?!\d)/i, " ");
     t = t.replace(/\bSeason[\s-]*\d{1,3}[\s-]*Episode[\s-]*\d{1,3}\b/i, " ");
-    // The bare "E484" anime marker, which has no season to key off.
-    t = t.replace(/(?:^|[\s._-])E\d{1,4}(?:[\s._-]|$)/i, " ");
+    // The bare "E484" anime marker, which has no season to key off — and the
+    // "EP.1" / "Episode.5" spellings of it.
+    t = t.replace(/(?:^|[\s._-])(?:EPISODE|EP|E)[\s._-]*\d{1,4}(?:[\s._-]|$)/i, " ");
     // Trailing absolute episode number ("Show Name - 12"). Four digits, because
     // that is how a long-running series writes it ("One Piece 1062"), and
     // leaving it capped at three kept the number in the title and cost a wasted

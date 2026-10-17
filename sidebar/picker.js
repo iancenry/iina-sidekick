@@ -70,26 +70,46 @@ function pickItem(item) {
 
 function renderSeasons() {
   if (!selShow||!selShow._seasons) return;
+  paintSeasonShell(selSeason);
+  if (selSeason!==null) renderEps(selSeason);
+}
+
+// The season pills, with `selected` lit, painted over an empty episode slot.
+// Shared by the automatic and the manual path, and by the retry in renderEps:
+// that retry moves the selection to the season the episode was actually found
+// in, and a panel still lighting the season it started on would name a season
+// the card below it does not belong to.
+function paintSeasonShell(selected) {
   var pills = "";
-  selShow._seasons.forEach(function(s){
-    pills += '<button class="pill'+(selSeason===s.season_number?" on":"")+
+  ((selShow && selShow._seasons) || []).forEach(function(s){
+    pills += '<button class="pill'+(selected===s.season_number?" on":"")+
       '" onclick="pickSeason('+htmlEsc(String(s.season_number))+')">S'+
       htmlEsc(String(s.season_number).padStart(2,"0"))+'</button>';
   });
   document.getElementById("panel").innerHTML =
     '<div class="sec"><div class="sl">Season</div><div class="pills">'+pills+'</div></div>' +
     '<div id="ep"></div>';
-  if (selSeason!==null) renderEps(selSeason);
 }
 
 function pickSeason(n){ selSeason=n; renderSeasons(); }
 
 // autoEp: when set, the episode is picked automatically as soon as the list
 // loads. This is what the filename-detection path uses.
-function renderEps(sNum, autoEp, token) {
+//
+// retrySeason: the other season to try before leaving the pills up — the one
+// the filename assumed when the folder's remembered season was used, or the
+// folder's season when the filename's was. Long-running series are numbered
+// straight through by their sources while TMDB splits them into seasons, so
+// the number often sits in one of the two and not the other.
+//
+// quiet marks that second look: it paints nothing and stores nothing, because
+// the pills already on screen index into the season it is *not* showing, and a
+// miss has to leave them exactly as they were.
+function renderEps(sNum, autoEp, token, retrySeason, quiet) {
   var el = document.getElementById("ep");
   if (!el) return;
-  el.innerHTML = '<div class="msg"><span class="sp"></span>Loading episodes…</div>';
+  var retry = (typeof retrySeason === "number" && retrySeason > 0) ? retrySeason : null;
+  if (!quiet) el.innerHTML = '<div class="msg"><span class="sp"></span>Loading episodes…</div>';
   fetch("https://api.themoviedb.org/3/tv/"+selShow.id+"/season/"+sNum+"?api_key="+TK)
     .then(function(r){return r.json();})
     .then(function(s){
@@ -99,49 +119,95 @@ function renderEps(sNum, autoEp, token) {
       // end with no way out, so say so instead. Tested on the field actually
       // used below, not on an id nothing reads.
       if (!s || !s.episodes) {
-        el.innerHTML = '<div class="msg">Couldn\'t load that season. Search again above.</div>';
+        if (!quiet) el.innerHTML = '<div class="msg">Couldn\'t load that season. Search again above.</div>';
         return;
       }
-      // Store season poster for overlay
-      seasonPosterUrl = s.poster_path
+      // Worked on locally until this season is the one being kept. The season
+      // poster and the cached list are what the pills on screen index into, so
+      // a look that misses must not leave them behind.
+      var eps = s.episodes || [];
+      var poster = s.poster_path
         ? IW + s.poster_path
         : (selShow && selShow.poster_path ? IW + selShow.poster_path : "");
+
+      var idx = -1;
+      if (autoEp) {
+        for (var i = 0; i < eps.length; i++) {
+          if (eps[i].episode_number === autoEp) { idx = i; break; }
+        }
+      }
+
+      if (idx < 0) {
+        // The number is not here. A quiet look has nothing to say about that.
+        if (quiet) return;
+        episodeCache = eps;
+        seasonPosterUrl = poster;
+        selSeason = sNum;
+        // Painted before the second look, because these are the pills the user
+        // is left with if that look misses too: the season the file was read
+        // from, which is the one the panel already lights.
+        paintEpisodes(sNum, autoEp, eps);
+        if (retry !== null && retry !== sNum && hasSeason(retry)) {
+          renderEps(retry, autoEp, token, null, true);
+        }
+        return;
+      }
+
       // FIX: Cache episodes in a plain JS array. Buttons use integer
       // indices only, with no JSON or encoding in onclick attributes.
       // Previously, ep.name/ep.overview with " characters would corrupt
       // the onclick HTML and silently disable specific episode buttons.
-      episodeCache = s.episodes || [];
-
-      var pills = "";
-      episodeCache.forEach(function(ep, i){
-        // The number is escaped too, though it is a number: this is the only
-        // dynamic value besides the tooltip that reaches the markup, and a
-        // hand-edited stored entry is not the only possible source.
-        var label = "E" + String(ep.episode_number).padStart(2,"0");
-        // Use htmlEsc for tooltip; no data at all in onclick
-        pills += '<button class="pill" title="'+htmlEsc(ep.name||"")+
-          '" onclick="pickEp('+i+')">'+htmlEsc(label)+'</button>';
-      });
-      el.innerHTML =
-        '<div class="sec" style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.07)">' +
-        '<div class="sl">Episode</div><div class="pills">'+pills+'</div></div>';
-
-      if (autoEp) {
-        for (var i = 0; i < episodeCache.length; i++) {
-          if (episodeCache[i].episode_number === autoEp) { pickEp(i, true); return; }
-        }
-        // Episode not in this season (bad parse, or season mismatch).
-        // Leave the pills up so the user can correct it in one click.
-        el.innerHTML = '<div class="msg" style="padding:6px 0">'
-          + htmlEsc(selShow._name || "") + ' has no episode '
-          + htmlEsc(String(autoEp)) + ' in season ' + htmlEsc(String(sNum))
-          + ': pick below.</div>' +
-          '<div class="sec" style="margin-top:8px"><div class="pills">'+pills+'</div></div>';
-      }
+      episodeCache = eps;
+      seasonPosterUrl = poster;
+      selSeason = sNum;
+      // A quiet look that found the episode moves the panel to that season
+      // before the pick, so nothing on screen names the season it left.
+      if (quiet) paintSeasonShell(sNum);
+      pickEp(idx, true);
     }).catch(function(){
       if (!tokenLive(token)) return;
-      el.innerHTML='<div class="msg">Failed to load episodes.</div>';
+      if (!quiet) el.innerHTML='<div class="msg">Failed to load episodes.</div>';
     });
+}
+
+// The episode pills, and the note that stands in for them when the number the
+// filename gave is not among them. Built from the list passed in rather than
+// from episodeCache, so a quiet look cannot paint the wrong season's episodes.
+function paintEpisodes(sNum, autoEp, eps) {
+  var el = document.getElementById("ep");
+  if (!el) return;
+  var pills = "";
+  eps.forEach(function(ep, i){
+    // The number is escaped too, though it is a number: this is the only
+    // dynamic value besides the tooltip that reaches the markup, and a
+    // hand-edited stored entry is not the only possible source.
+    var label = "E" + String(ep.episode_number).padStart(2,"0");
+    // Use htmlEsc for tooltip; no data at all in onclick
+    pills += '<button class="pill" title="'+htmlEsc(ep.name||"")+
+      '" onclick="pickEp('+i+')">'+htmlEsc(label)+'</button>';
+  });
+  if (autoEp) {
+    // Episode not in this season (bad parse, or season mismatch).
+    // Leave the pills up so the user can correct it in one click.
+    el.innerHTML = '<div class="msg" style="padding:6px 0">'
+      + htmlEsc(selShow._name || "") + ' has no episode '
+      + htmlEsc(String(autoEp)) + ' in season ' + htmlEsc(String(sNum))
+      + ': pick below.</div>' +
+      '<div class="sec" style="margin-top:8px"><div class="pills">'+pills+'</div></div>';
+    return;
+  }
+  el.innerHTML =
+    '<div class="sec" style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.07)">' +
+    '<div class="sl">Episode</div><div class="pills">'+pills+'</div></div>';
+}
+
+// Whether a season the show actually has can be asked for at all. A pin
+// outlives the season list it was written against, and a season that is gone
+// would end in a 404 page rather than the pills.
+function hasSeason(n) {
+  return !!(selShow && selShow._seasons && selShow._seasons.some(function(s){
+    return s.season_number === n;
+  }));
 }
 
 // The release year out of a TMDB date string, used wherever one is needed.
@@ -187,10 +253,6 @@ function pickEp(idx, auto) {
   // the rejection was absorbed by renderEps' catch, which turned a real bug
   // into silence.
   if (!selShow) return;
-  // Captured now rather than read from the module later: a response that
-  // arrives after the user has moved on must not act on the new file. (The
-  // staleness itself is checked by renderEps, before this is ever reached.)
-  var pickDir = currentParsed && currentParsed.titleDir;
   // An episode TMDB has no votes for carries vote_average 0, and a blank star
   // was all the card showed. The show's score arrived with the detail response
   // already in hand, so it stands in, marked as the series figure so an
@@ -217,10 +279,41 @@ function pickEp(idx, auto) {
     // without the show's season totals, which are not loaded here, so the
     // number that produced the entry is recorded instead. See the staleness
     // check in the fileChanged handler.
-    absoluteFrom: currentParsed ? (currentParsed.absolute || null) : null
+    absoluteFrom: currentParsed ? (currentParsed.absolute || null) : null,
+    // What the filename itself claimed, which is not always what is saved: the
+    // user can correct a season by hand, and a pinned folder can supply one.
+    // Recorded for the same reason as absoluteFrom above, so that a re-play
+    // compares the entry against the file it was built from instead of against
+    // the pick — a saved S02E41 on a file that reads S01E41 is the correction,
+    // not a stale entry. Null when the filename named neither, and left
+    // undefined by entries written before the field existed.
+    parsedSeason:  currentParsed && currentParsed.code ? currentParsed.code.season : null,
+    parsedEpisode: currentParsed && currentParsed.code ? currentParsed.code.episode : null
   };
+  // Captured now, from the parse and the pick in hand, rather than read from
+  // the module later: a response that arrives after the user has moved on must
+  // not pin the folder of the file playing by then.
+  var pickDir = pinDirFor(currentParsed, info);
   saveSelection(info);
   if (!auto) rememberFolderPin(info, pickDir);
+}
+
+// Which directory a manual pick should pin, or "" when none looks safe.
+//
+// The directory that supplied the title is always worth remembering. When the
+// filename supplied its own, the walk's directory is still used, but only when
+// the show the user picked is not the one the filename named: a filename that
+// did name the show has already been trusted with the identification, and the
+// directory above it is the media folder as often as it is the show. That is
+// what makes the shape pinning exists for work — "AnimePahe Bleach - Sennen
+// Kessen-hen - 41" names neither the show nor anything TMDB has, so the folder
+// beside it is the only thing that did.
+function pinDirFor(parsed, info) {
+  if (!parsed || !info || !info.showTitle) return "";
+  if (parsed.titleDir) return parsed.titleDir;
+  if (!parsed.folderDir) return "";
+  if (titleScore(parsed.title, info.showTitle) >= AUTO_MIN_SCORE) return "";
+  return parsed.folderDir;
 }
 
 // Record "this directory is that show", so every other file in it stops

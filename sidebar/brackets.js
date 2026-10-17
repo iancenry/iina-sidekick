@@ -20,7 +20,7 @@ function bracketTitles(base) {
   var strong = [], weak = [], m;
   var re = /\[([^\]]+)\]/g;
   while ((m = re.exec(base)) !== null) {
-    var t = cleanTitle(m[1], null);
+    var t = cleanTitle(m[1], null, true);
     if (!isRealTitle(t)) continue;
     // No letters at all: an episode range such as "[1062-1063]", not a name.
     if (!/[a-z]/i.test(t)) continue;
@@ -106,6 +106,24 @@ function absoluteFromBrackets(base) {
   return null;
 }
 
+// The number a fansub writes beside the episode name when the episode itself
+// is marked by an absolute number in brackets: "[One Pace][1069-1070] Egghead
+// 08" is the eighth episode of the recut. Against the series the recut re-cuts
+// the counter means nothing — the original's episode 8 is a different episode —
+// so it is read here and used only where a folder pin gives it a season.
+//
+// The last surviving number wins, because that is where a counter sits: after
+// the episode name. Resolutions and channel specs go before the separators are
+// flattened, so what is left here is what a name wrote as a bare number.
+function trailingCounter(stripped) {
+  var m = stripped.match(/(?:^|[^A-Za-z0-9])\d{1,3}(?![0-9A-Za-z])/g);
+  if (!m || !m.length) return null;
+  var n = parseInt(m[m.length - 1].replace(/[^\d]/g, ""), 10);
+  // A resolution that escaped its brackets is not an episode number.
+  if (!n || RESOLUTION_VALUES[n]) return null;
+  return n;
+}
+
 // The most recent parse, kept so the pin writer can ask which directory
 // supplied the title without parsing the URL a second time.
 var currentParsed = null;
@@ -158,6 +176,13 @@ function parseFilename(url) {
   var altTitles = bracketTitles(base);
   var absolute = absoluteFromBrackets(base);
   var code = null;
+  // The fansub's own counter, beside the episode name: "Egghead 08". It only
+  // has a meaning where an absolute number in the brackets makes the file's
+  // numbering the source's rather than TMDB's, and only a folder pin gives it
+  // a season to be an episode of. See folderCounter in applyShowDetail.
+  // Named apart from the `counter` below, which is the digits-equal-episode
+  // test for the title.
+  var nameCounter = null;
 
   // Brackets usually hold the noise ("[1080p]", "[SubsPlease]") and would
   // otherwise defeat the end-anchored absolute-episode pattern.
@@ -212,11 +237,14 @@ function parseFilename(url) {
     .replace(/\([^)]*\)/g, " ")
     .replace(/[._]+/g, " ")
     .replace(/\s+/g, " ").trim();
+  var codeHead = "";
   if (absolute === null) {
     // Never the raw name. Falling back to it is what produced the DDP5.1 bug:
     // the cleaned form has no episode, then the raw one finds the trailing "1"
     // and invents episode 1.
-    code = parseEpisodeCode(numRaw) || parseEpisodeCode(numStripped);
+    var cm = episodeCodeMatch(numRaw) || episodeCodeMatch(numStripped);
+    code = cm ? cm.code : null;
+    codeHead = cm ? cm.head : "";
     if (!code) {
       var bracketed = episodeFromBrackets(base);
       if (bracketed !== null) {
@@ -236,7 +264,7 @@ function parseFilename(url) {
   // episode 1234 of a show called IMG.
   if (code && !code.seasonFromName && code.episode >= 1000) {
     var attributable = code.marker === "E" ||
-      cleanTitle(base, code).split(/\s+/).filter(Boolean).length > 1;
+      cleanTitle(base, code, true).split(/\s+/).filter(Boolean).length > 1;
     if (attributable) {
       absolute = code.episode;
       code = null;
@@ -264,7 +292,22 @@ function parseFilename(url) {
   // Cleaned from numRaw, not base. The leftover "1" of "DDP5.1" survives as a
   // bare trailing token, which then blocks the $-anchored year strip and left
   // titles reading "Movie Title 2019".
-  var title = cleanTitle(imdbId ? numRaw.replace(imdb[0], " ") : numRaw, code);
+  // The extension is already off (parseFilename strips it), so the name handed
+  // over is a fragment like every other: without that, a dotted name ending in
+  // a short word lost it — "S01E01.The.Death.Row" cleaned down to "The Death".
+  var title = cleanTitle(imdbId ? numRaw.replace(imdb[0], " ") : numRaw, code, true);
+  // The show's name is what precedes the episode code: everything after it is
+  // the episode's own title and then the release tags, and TMDB matches every
+  // word, so searching with them returns nothing at all.
+  // "Hells.Paradise.S01E01.The.Death.Row.Convict.and.the.Executioner.1080p.CR.
+  // WEB-DL.AAC2.0.H.264-HDC" asked six questions that all came back empty,
+  // because "Hells Paradise" is the two-word prefix the ladder never reached.
+  // Taken only when a real title is left standing in front of the code: a name
+  // that writes the code first keeps the cleaned whole, as it did before.
+  if (codeHead) {
+    var head = cleanTitle(imdbId ? codeHead.replace(imdb[0], " ") : codeHead, null, true);
+    if (isRealTitle(head)) title = head;
+  }
   // …and an absolute number is not an episode code either, so it stays in the
   // title unless it is taken off here. "One Piece 1062" searched for itself
   // before the ladder got to "One Piece".
@@ -272,6 +315,9 @@ function parseFilename(url) {
     // The fansub's own counter trails the episode name and is not the absolute
     // number ("Egghead 04" on an episode marked [1062-1063]): with the bracket
     // number in hand the counter names nothing, and it was being searched for.
+    // Kept as the fallback for a season that is numbered by it — see the
+    // folderCounter note in applyShowDetail.
+    nameCounter = trailingCounter(stripped);
     title = title.replace(/[\s._-]+v?\d{1,3}$/, " ");
     // The E is optional because the E-marker form ("Show E1062") is what put
     // the number here in the promotion path.
@@ -293,9 +339,13 @@ function parseFilename(url) {
     // asked, and every file in a season folder would then be searched for by
     // its own episode name.
     if (leading || !isRealTitle(title)) { title = hints.title; titleDir = hints.dir; }
-    // …and a season, but only where the filename did not state one.
+    // …and a season, but only where the filename did not state one. Recorded as
+    // coming from the folder rather than from the name: a pinned folder's
+    // remembered season may replace an assumption, never a statement, and the
+    // file's own folder is closer to the file than the pin is.
     if (code && hints.season !== null && !code.seasonFromName) {
-      code = { season: hints.season, episode: code.episode, extra: code.extra, seasonFromName: false };
+      code = { season: hints.season, episode: code.episode, extra: code.extra,
+               seasonFromName: false, seasonFromFolder: true };
     }
   } else if (isPlaceholderTitle(title)) {
     // Nothing to replace it with. Searching TMDB for "Episode" finds nothing
@@ -357,6 +407,16 @@ function parseFilename(url) {
     // Series names recovered from bracket groups, and the absolute episode
     // number that made the filename's own episode code untrustworthy.
     altTitles: altTitles, absolute: absolute, titleDir: titleDir,
+    // The directory the walk found, whether or not the name above was
+    // adopted. It is what the pin writer falls back to when the user picks a
+    // show the filename did not name: a title the filename gave is no
+    // evidence that it named the show, and the directory is then the only
+    // thing that did. Empty when the walk was stopped by FOLDER_NOISE, which
+    // is what keeps a flat library's media folder out of it.
+    folderDir: hints ? hints.dir : "",
+    // The fansub's own counter, when the episode was an absolute number.
+    // Meaningless without the season a pin supplies; see trailingCounter.
+    counter: nameCounter,
     // No episode code but a year: almost certainly a film.
     isMovie: !code && !!year
   };

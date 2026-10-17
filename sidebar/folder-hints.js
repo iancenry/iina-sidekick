@@ -92,6 +92,10 @@ function isPlaceholderTitle(t) {
   if (!t) return false;
   var s = t.trim();
   if (/^(?:episode|ep|e|part|pt|disc|cd|dvd|vol|volume|file|track)\.?$/i.test(s)) return true;
+  // A version suffix on its own names nothing either. "EP.13.v0.720p.mp4" is
+  // left with "v0" once the marker and the resolution are off it, and without
+  // this the folder beside it was never consulted for the show's name.
+  if (/^v\d{1,2}$/i.test(s)) return true;
   // Release noise on its own is a placeholder as well. "WEB" is all that is
   // left of "S02E03.1080p.WEB-DL.DDP5.1.H.264-NTb.mkv": it names nothing, and
   // a directory beside it was the better answer all along. Only the case where

@@ -373,7 +373,10 @@ test("a dot-separated codec chain does not eat the release group", () => {
   // first digit: the tag and the "4" went together and "kHdHub" stayed in the
   // title. A space breaks the chain, so only dotted names were hit.
   const p = parse(at("", "VisionQuest.S01E01.No.Strings.2160p.DSNP.WEB-DL.Multi.DDP5.1.Atmos.DV.HDR.H.265-4kHdHub.Com.mkv"));
-  assert.equal(p.title, "VisionQuest No Strings DSNP");
+  // "No Strings" and the DSNP tag are the episode's own title and a service
+  // tag, both after the code, so neither reaches the title any more. The
+  // release group is what this test is about, and it is gone as well.
+  assert.equal(p.title, "VisionQuest");
   assert.equal(p.code.episode, 1);
   // Any group that starts with a digit is the shape that trips it.
   assert.equal(parse(at("", "Oppenheimer.2023.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-3L.mkv")).title,
@@ -816,4 +819,182 @@ test("S01E00 is an episode, not a parse failure", () => {
   assert.equal(p.title, "Show");
   assert.equal(p.code.season, 1);
   assert.equal(p.code.episode, 0);
+});
+
+// ── The directory a pick can fall back to ───────────────────────────
+
+test("the walk's directory survives a filename that supplied its own title", () => {
+  // The pin writer reads this when the user picks a show the filename did not
+  // name. "AnimePahe Bleach - Sennen Kessen-hen - 41" names nothing TMDB has,
+  // and the folder beside it is the only thing that did.
+  const p = parse("file:///Volumes/Transcend/watching/anime/Bleach%20TYBW%20The%20Calamity/"
+    + "AnimePahe_Bleach_-_Sennen_Kessen-hen_-_41_1080p_Disney_Plus.mp4");
+  // "… - 41 Plus" is the code and a service tag, both after the show's name,
+  // so the title is the show itself.
+  assert.equal(p.title, "AnimePahe Bleach - Sennen Kessen-hen");
+  assert.equal(p.titleDir, "", "the filename's own title was not kept");
+  assert.equal(p.folderDir, "Bleach TYBW The Calamity");
+  assert.equal(typeof p.folderDir, "string");
+});
+
+test("a filename with nothing to fall back to offers no directory", () => {
+  // "Videos" is FOLDER_NOISE, so the walk stops before it and a pick in a flat
+  // library has nothing to pin.
+  const p = parse("file:///Users/me/Videos/Severance S01E01.mkv");
+  assert.equal(p.folderDir, "");
+});
+
+test("the directory that supplied the title is offered as folderDir as well", () => {
+  const p = parse(at("Samurai champloo", "11.mkv"));
+  assert.equal(p.titleDir, "Samurai champloo");
+  assert.equal(p.folderDir, "Samurai champloo");
+});
+
+// ── Where the season came from ──────────────────────────────────────
+// A pinned folder's remembered season may replace one that was only assumed,
+// never one that was stated — and a season written in the file's own folder is
+// a statement, not an assumption.
+
+test("a season the folder supplied is marked as the folder's", () => {
+  const p = parse("file:///Users/me/Videos/Severance/Season%203/05.mkv");
+  assert.equal(p.code.season, 3);
+  assert.equal(p.code.seasonFromName, false);
+  assert.equal(p.code.seasonFromFolder, true);
+});
+
+test("a season the filename stated is not marked as the folder's", () => {
+  const p = parse(at("", "Show.S02E05.mkv"));
+  assert.equal(p.code.season, 2);
+  assert.equal(p.code.seasonFromName, true);
+  assert.ok(!p.code.seasonFromFolder, "a stated season was marked as the folder's");
+});
+
+test("a season nothing stated is marked as neither", () => {
+  // "… - 42" is the shape the folder's season exists for: the 1 is a
+  // placeholder, not an answer.
+  const p = parse(at("Bleach TYBW The Calamity", "AnimePahe_Bleach_-_Sennen_Kessen-hen_-_42_1080p_Disney_Plus.mp4"));
+  assert.equal(p.code.season, 1);
+  assert.equal(p.code.seasonFromName, false);
+  assert.ok(!p.code.seasonFromFolder, "an assumed season was marked as the folder's");
+});
+
+// ── The episode's own title after the code ──────────────────────────
+
+test("the title stops at the episode code", () => {
+  // Everything after the code is the episode's own title and the release tags,
+  // and TMDB wants every word, so the whole thing asked six questions that all
+  // came back empty while the show's own name sat just past the budget.
+  const p = parse("file:///Users/me/Videos/"
+    + "Hells.Paradise.S01E01.The.Death.Row.Convict.and.the.Executioner.1080p.CR.WEB-DL.AAC2.0.H.264-HDC.mkv");
+  assert.equal(p.title, "Hells Paradise");
+  assert.equal(p.code.season, 1);
+  assert.equal(p.code.episode, 1);
+});
+
+test("a multi-episode code is cut at its first episode", () => {
+  const p = parse(at("", "Show.S01E01E02.The.Title.1080p.mkv"));
+  assert.equal(p.title, "Show");
+  assert.equal(p.code.episode, 1);
+  assert.equal(p.code.extra, 2);
+});
+
+test("a name that writes the code first keeps its cleaned title", () => {
+  // Nothing is left standing in front of the code, so the whole cleaned name
+  // stands as before. A show's name written after the code is rare, and this is
+  // the shape it arrives in.
+  const p = parse(at("", "S01E01.The.Death.Row.mkv"));
+  assert.equal(p.title, "The Death Row");
+  assert.equal(p.code.episode, 1);
+});
+
+test("a title that is only a code still comes from the directory", () => {
+  const p = parse(at("Severance", "S01E01.mkv"));
+  assert.equal(p.title, "Severance");
+  assert.equal(p.titleDir, "Severance");
+});
+
+test("a dotted directory name keeps its last word", () => {
+  // cleanTitle's extension pass is for whole filenames. A directory segment is
+  // a fragment, and running that pass on one ate the word after the dot:
+  // "My.Show" cleaned down to "My".
+  const p = parse(at("My.Show", "05.mkv"));
+  assert.equal(p.title, "My Show");
+});
+
+// ── A folder per cour, EP.<n> files ────────────────────────────────
+
+test("EP.1 is an episode number, and the folder names the show", () => {
+  // "megalobox/1/EP.1.720p.mp4": the marker is the whole filename, so the show
+  // has to come from the directory — and it did not, because "EP 1" was read as
+  // a title and searched for.
+  const p = parse("file:///Volumes/Transcend/movies/anime/megalobox/1/EP.1.720p.mp4");
+  assert.equal(p.title, "megalobox");
+  assert.equal(p.titleDir, "megalobox");
+  assert.equal(p.code.season, 1);
+  assert.equal(p.code.episode, 1);
+});
+
+test("a bare number folder is the season, where the show is above it", () => {
+  // The same library puts each cour in "1", "2", …: season 1 of MEGALOBOX and
+  // season 2 of it, which the marker alone cannot tell apart.
+  const p = parse("file:///Volumes/Transcend/movies/anime/megalobox/2/EP.1.v0.720p.mp4");
+  assert.equal(p.title, "megalobox");
+  assert.equal(p.code.season, 2);
+  assert.equal(p.code.episode, 1);
+});
+
+test("a version suffix is not a title", () => {
+  // "EP.13.v0.720p" left "v0" as the title once the marker and the resolution
+  // were off it, and a title that names nothing has to give way to the folder.
+  const p = parse("file:///Volumes/Transcend/movies/anime/megalobox/1/EP.13.v0.720p.mp4");
+  assert.equal(p.title, "megalobox");
+  assert.equal(p.code.episode, 13);
+});
+
+test("Episode 5 and EP 5 are the same marker", () => {
+  const p = parse(at("Severance", "Episode 5.mkv"));
+  assert.equal(p.code.episode, 5);
+  assert.equal(p.title, "Severance");
+});
+
+test("a bare number folder that is a year is still a year", () => {
+  // The year rule stops the walk before the season rule can read it, so a film
+  // in "/movies/2024/" does not become season 24 of anything.
+  const p = parse("file:///Users/me/movies/2024/Some.Film.mkv");
+  assert.equal(p.code, null);
+  assert.equal(p.title, "Some Film");
+});
+
+// ── The counter beside an absolute number ───────────────────────────
+
+test("the counter beside an absolute number is kept", () => {
+  // "Egghead 08" of a recut, whose season is numbered by these counters even
+  // though the source marks the same episode 1069. Only a folder pin gives it
+  // a season to mean anything in, which is why the parser keeps it.
+  const p = parse("file:///v/[One Pace][1069-1070] Egghead 08 Extended [1080p][En Sub][224EEF70].mp4");
+  assert.equal(p.absolute, 1069);
+  assert.equal(p.counter, 8);
+  assert.equal(p.title, "Egghead");
+});
+
+test("a name with no counter reports none, and no counter is invented", () => {
+  // The bracket group is the absolute number here and nothing follows it.
+  const p = parse("file:///v/[Group][1062-1063] Show [1080p].mp4");
+  assert.equal(p.absolute, 1062);
+  assert.equal(p.counter, null);
+  assert.equal(p.title, "Show");
+});
+
+test("a resolution that escaped its brackets is not a counter", () => {
+  const p = parse("file:///v/[Group][1062-1063] Show 720p.mkv");
+  assert.equal(p.absolute, 1062);
+  assert.equal(p.counter, null);
+});
+
+test("an episode code leaves no counter behind", () => {
+  // The counter is only read where the episode is an absolute number: with a
+  // real code, the code is the episode.
+  const p = parse(at("", "Show.S01E09.mkv"));
+  assert.equal(p.code.episode, 9);
+  assert.equal(p.counter, null);
 });

@@ -38,6 +38,8 @@ click once instead of four times.
 | `Breaking Bad - S03E11 - 1080p.mkv` | Breaking Bad, S03E11 |
 | `Show.Name.1x05.avi` | Show Name, S01E05 |
 | `Doctor Who Season 2 Episode 7.mkv` | Doctor Who, S02E07 |
+| `Hells.Paradise.S01E01.The.Death.Row.Convict.and.the.Executioner.1080p.CR.WEB-DL.AAC2.0.H.264-HDC.mkv` | Hell's Paradise, S01E01 |
+| `megalobox/1/EP.1.720p.mp4` | MEGALOBOX, S01E01 (the folder per cour is the season) |
 | `Naruto.Shippuuden.E484.720p.Bia2Anime.mkv` | Naruto Shippuden, S01E484 |
 | `AnimePahe_Nippon_Sangoku_-_05_1080p_Amazon.mp4` | Nippon Sangoku, S01E05 |
 | `[SubsPlease] Frieren - 05 (1080p).mkv` | Frieren, S01E05 |
@@ -47,6 +49,12 @@ click once instead of four times.
 
 Release noise (`1080p`, `WEB-DL`, `DDP5.1`, `H.264`, `-NTb`, `[SubsPlease]`,
 site prefixes, CRC32 checksums) is stripped before searching.
+
+The episode's own title is not searched for either. Everything after the
+episode code belongs to the episode — `Hells.Paradise.S01E01.The.Death.Row.
+Convict.and.the.Executioner.1080p.CR...` is looked up as `Hells Paradise`, in
+one query, because TMDB matches every word and that name's worth of words
+returned nothing at all.
 
 Some conventions it cannot read from the name alone:
 
@@ -73,7 +81,28 @@ entirely. A "Remember this folder" checkbox sits under the card, and an ✕
 forgets it again.
 
 Automatic matches never write a pin. Only a pick you made yourself counts as
-agreement, so one bad guess cannot quietly take over a whole folder.
+agreement, so one bad guess cannot quietly take over a whole folder. The pin is
+written when the directory named the show, and also when the filename named a
+*different* one: `AnimePahe_Bleach_-_Sennen_Kessen-hen_-_41_1080p_Disney_Plus.mp4`
+in a folder called `Bleach TYBW The Calamity` pins the folder, because nothing
+in the filename is the show you picked. A filename whose own name matches the
+show pins nothing — in a flat library the directory above it is the media
+folder as often as it is the show's own.
+
+The season you picked in travels with the pin, and it replaces the season such
+a file would otherwise assume — `AnimePahe_..._-_42_...` reads as season 1 only
+because nothing in the name said otherwise. That matters when the show's own
+split makes both answers plausible: Bleach on TMDB is one entry with the 2004
+series as season 1 and Thousand-Year Blood War as season 2, so an "episode 42"
+exists in each, and only the folder's answer is not a guess.
+
+A recut gets the same treatment, one step further. `[One Pace][1071-1072]
+Egghead 09` is numbered 1071 by the source, and TMDB's "One Pace" lists 473
+episodes in total, so the arithmetic can place season 36 and no episode of it.
+The number beside the episode name — that `09` — is what season 36 is actually
+numbered by, and the pin supplies the season it belongs to. Without a pin
+nothing is guessed from that number: against the original series it would name
+a different episode entirely.
 
 <img src="docs/images/sidebar.png" alt="The Sidekick sidebar tab: the overlay toggle, the identified episode with its overview, the Remember this folder checkbox, the API key state, the search box, recent searches, recent picks, and the shade, position, theme and delay controls." width="380">
 

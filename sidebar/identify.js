@@ -130,8 +130,15 @@ function autoIdentify(url) {
 
   // A folder the user has already told us what it holds. This outranks
   // everything: no search, no ladder, one request for the show itself.
+  //
+  // …unless the file is a film. A pin names a series, and a folder that holds
+  // films as well — a media root, or a series folder someone dropped a film
+  // into — must not have each of them read as an episode of whatever series
+  // was picked beside them. A film carries its own year and its own search,
+  // which is the whole identification; every other unreadable name in the
+  // folder still gets the show.
   var pin = pinForUrl(url);
-  if (pin && pin.show.tmdbId) {
+  if (pin && pin.show.tmdbId && !parsed.isMovie) {
     touchPin(pin.dir);
     applyPinnedShow(pin, parsed, myToken);
     return true;
@@ -372,7 +379,17 @@ function locateAbsolute(show, absolute) {
 // Wire the picker to a full show detail object, whichever route produced it:
 // /tv/{id} after a ladder match, or /tv/find/{imdb_id} when the filename
 // carries an IMDb id. Both return the same shape.
-function applyShowDetail(show, code, absolute, token) {
+//
+// folderSeason is the season a pinned folder remembers, and is absent on every
+// other route. It is a fallback, never a correction: only a season that was
+// merely assumed can be replaced by it, and only when the episode turns out
+// not to be there at all.
+//
+// folderCounter is the number the filename writes beside the episode name
+// ("Egghead 08"), and is read only when the episode is an absolute number the
+// show has no room for — which is what a recut looks like against the series
+// it re-cuts. Without the season the pin supplies, such a number means nothing.
+function applyShowDetail(show, code, absolute, token, folderSeason, folderCounter) {
   if (!currentVideoUrl) return;
   if (!tokenLive(token)) return;
   // A request that 404s still resolves, with a JSON body carrying no id. That
@@ -396,6 +413,46 @@ function applyShowDetail(show, code, absolute, token) {
   // adding up the seasons. Failing that, open on the first season.
   var located = code ? { season: code.season, episode: code.episode }
                      : locateAbsolute(show, absolute);
+
+  // A season that was only ever *assumed* — nothing in the name and nothing in
+  // the file's own folder said which one it was — is replaced by the season the
+  // pinned folder remembers, and the assumption becomes the fallback. It has to
+  // replace rather than wait its turn: "AnimePahe … - 42" reads as season 1
+  // episode 42, and for a show whose first season is its 366-episode original
+  // run that number exists there, so a fallback that waits for a miss never
+  // fires and the 2004 series' episode 42 is what gets saved. The pin is an
+  // answer where the 1 is a placeholder.
+  //
+  // A season the filename stated, or one the file's own folder supplied, is
+  // left alone: both are closer to the file than a pick made elsewhere in the
+  // directory tree, and both are what the picture below them is built from.
+  var assumed   = !!(code && !code.seasonFromName && !code.seasonFromFolder);
+  var pinned    = (typeof folderSeason === "number" && folderSeason > 0) ? folderSeason : null;
+  var pinnedOk  = pinned !== null && selShow._seasons.some(function(s) {
+    return s.season_number === pinned;
+  });
+  var retrySeason = null;
+  if (assumed && pinnedOk && pinned !== located.season) {
+    // The assumption, to be tried if the folder's season turns out not to hold
+    // the number. A season the show no longer has is not an answer, so a pin
+    // that names one is ignored rather than landing on pills.
+    retrySeason = located.season;
+    located = { season: pinned, episode: located.episode };
+  }
+
+  // An absolute number the show has no room for: the source numbers episodes
+  // past the end of TMDB's list, which is what a recut looks like against the
+  // series it re-cuts. "One Pace" season 36 holds the 22 recut episodes while
+  // the source marks them 1069 and up, so the arithmetic runs out and claims no
+  // episode. The file still says which one it is beside the episode name, and
+  // the pinned folder says which season those numbers live in — together that
+  // is enough to select it. Nothing is guessed without the pin: "Egghead 04"
+  // against the original series would be that show's own episode 4, which is a
+  // different episode of a different series.
+  if (!code && absolute && folderCounter && pinnedOk && (!located || located.episode === null)) {
+    retrySeason = (located && located.season !== pinned) ? located.season : null;
+    located = { season: pinned, episode: folderCounter };
+  }
   var auto = located;
 
   // If the filename named a season the show doesn't have, fall back to
@@ -411,19 +468,11 @@ function applyShowDetail(show, code, absolute, token) {
 
   // Build the same panel shape a manual pick produces, so the season and
   // episode pills stay available for a one-click correction.
-  var pills = "";
-  selShow._seasons.forEach(function(s) {
-    pills += '<button class="pill' + (wanted === s.season_number ? " on" : "") +
-      '" onclick="pickSeason(' + htmlEsc(String(s.season_number)) + ')">S' +
-      htmlEsc(String(s.season_number).padStart(2, "0")) + '</button>';
-  });
-  document.getElementById("panel").innerHTML =
-    '<div class="sec"><div class="sl">Season</div><div class="pills">' + pills + '</div></div>' +
-    '<div id="ep"></div>';
+  paintSeasonShell(wanted);
 
   // Without an episode to select, renderEps leaves the pills up and the panel
   // waits for a click rather than guessing which one was meant.
-  renderEps(wanted, auto ? auto.episode : null, token);
+  renderEps(wanted, auto ? auto.episode : null, token, retrySeason);
 }
 
 // A pinned folder names its show, so there is nothing to search for: fetch
@@ -433,7 +482,13 @@ function applyPinnedShow(pin, parsed, token) {
   fetch("https://api.themoviedb.org/3/tv/" + encodeURIComponent(pin.show.tmdbId)
     + "?api_key=" + TK + "&append_to_response=images")
     .then(function(r) { return r.json(); })
-    .then(function(show) { applyShowDetail(show, parsed.code, parsed.absolute, token); })
+    // The season the pin remembers came from a pick in this same directory,
+    // and is what makes the rest of the folder resolve without a click — with
+    // the file's own counter for the sources whose numbering TMDB does not
+    // share.
+    .then(function(show) {
+      applyShowDetail(show, parsed.code, parsed.absolute, token, pin.show.season, parsed.counter);
+    })
     .catch(function() { if (tokenLive(token)) resetPanel(); });
 }
 

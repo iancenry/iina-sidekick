@@ -69,15 +69,125 @@ const SEVERANCE_RESULTS = {
 async function manualPick(h, url) {
   // What a user does: open the file, search, click the show, click a season,
   // click an episode.
+  await manualPickShow(h, url, { id: 1399, media_type: "tv", name: "Severance", poster_path: "/p.jpg" }, 1, 0);
+}
+
+// The same, for a test that needs its own show. `seasonNumber` and `epIndex`
+// are what the user clicks.
+async function manualPickShow(h, url, item, seasonNumber, epIndex) {
   h.iina._emit("fileChanged", { url });
   await settle();
-  h.global.pickItem({ id: 1399, media_type: "tv", name: "Severance", poster_path: "/p.jpg" });
+  h.global.pickItem(item);
   await settle();
-  h.global.pickSeason(1);
+  h.global.pickSeason(seasonNumber);
   await settle();
-  h.global.pickEp(0);
+  h.global.pickEp(epIndex);
   await settle();
 }
+
+// ── A cour folder whose filenames name no show TMDB has ─────────────
+// The case pinning exists for, and the one that was falling through: the
+// walk finds "Bleach TYBW The Calamity", the filename supplies a title of its
+// own, and the pick was thrown away with the folder it belonged to.
+const BLEACH_DIR = "file:///Volumes/Transcend/watching/anime/Bleach%20TYBW%20The%20Calamity";
+const BLEACH_FILE = BLEACH_DIR + "/AnimePahe_Bleach_-_Sennen_Kessen-hen_-_41_1080p_Disney_Plus.mp4";
+
+const BLEACH = {
+  id: 30984,
+  name: "Bleach",
+  poster_path: "/b.jpg",
+  vote_average: 8.6,
+  number_of_seasons: 3,
+  number_of_episodes: 420,
+  // The show as TMDB files it: season 1 is the 2004 series, 366 episodes long,
+  // and season 2 is Thousand-Year Blood War with 50. That is the trap the cour
+  // files fall into — "… - 42" reads as season 1 episode 42, and an episode 42
+  // exists there, so nothing about a fallback ever fires.
+  seasons: [{ season_number: 1, episode_count: 366 }, { season_number: 2, episode_count: 50 }],
+  images: { logos: [] }
+};
+function bleachSeason(n) {
+  var eps = [], to = n === 1 ? 366 : 50;
+  for (var i = 1; i <= to; i++) eps.push({ episode_number: i, name: "Ep " + i, air_date: "2026-07-25" });
+  return { poster_path: "/s" + n + ".jpg", episodes: eps };
+}
+const BLEACH_ROUTES = {
+  "/3/tv/30984/season/1": bleachSeason(1),
+  "/3/tv/30984/season/2": bleachSeason(2),
+  "/3/tv/30984": BLEACH
+};
+
+// What the cour test above writes, for the tests that need one to start from.
+function pinnedCour(over = {}) {
+  return boot({
+    routes: { ...BLEACH_ROUTES, ...(over.routes || {}) },
+    storage: {
+      ...KEY,
+      epinfo_folder_map: JSON.stringify({
+        "Bleach TYBW The Calamity": { tmdbId: "30984", name: "Bleach", season: 2, lastSeen: Date.now() }
+      }),
+      ...(over.storage || {})
+    }
+  });
+}
+
+// ── A recut, whose season is numbered by the source's own counters ───
+// TMDB 336584: 36 seasons, 473 episodes, and season 36 ("Egghead") carries the
+// 22 recut episodes under the numbers the fansub writes in the filename. The
+// source itself numbers the same episodes 1069 and up — past every episode
+// TMDB lists for the show — so the arithmetic can place the season but never
+// the episode.
+const ONE_PACE_DIR = "file:///Volumes/Transcend/watching/anime/one pace/36";
+const ONE_PACE_FILE = ONE_PACE_DIR +
+  "/[One Pace][1071-1072] Egghead 09 [1080p][En Sub][BD6C0767].mp4";
+
+const ONE_PACE = {
+  id: 336584,
+  name: "One Pace",
+  poster_path: "/op.jpg",
+  vote_average: 8.4,
+  number_of_seasons: 36,
+  number_of_episodes: 473,
+  seasons: (function () {
+    var out = [];
+    for (var i = 1; i <= 35; i++) out.push({ season_number: i, episode_count: i === 35 ? 62 : 13 });
+    out.push({ season_number: 36, episode_count: 22 });
+    return out;
+  })(),
+  images: { logos: [] }
+};
+const ONE_PACE_ROUTES = {
+  "/3/tv/336584/season/36": (function () {
+    var eps = [];
+    for (var i = 1; i <= 22; i++) eps.push({ episode_number: i, name: "Egghead " + i, air_date: "" });
+    return { poster_path: "/s36.jpg", episodes: eps };
+  })(),
+  "/3/tv/336584": ONE_PACE,
+  "/3/search/tv": (function () {
+    return { results: [{ id: 336584, name: "One Pace", vote_count: 900, poster_path: "/op.jpg" }] };
+  })()
+};
+
+// The pin the pick of one episode writes for the folder it is in.
+function pinnedRecut(over = {}) {
+  return boot({
+    routes: { ...ONE_PACE_ROUTES, ...(over.routes || {}) },
+    storage: {
+      ...KEY,
+      epinfo_folder_map: JSON.stringify({
+        "one pace": { tmdbId: "336584", name: "One Pace", season: 36, lastSeen: Date.now() }
+      }),
+      ...(over.storage || {})
+    }
+  });
+}
+
+const FIGHT_CLUB_RESULTS = {  results: [{ id: 550, media_type: "movie", title: "Fight Club", release_date: "1999-10-15", vote_count: 27000, poster_path: "/fc.jpg" }]
+};
+const FIGHT_CLUB_DETAIL = {
+  id: 550, title: "Fight Club", release_date: "1999-10-15", vote_average: 8.4,
+  overview: "o", poster_path: "/fc.jpg", images: {}
+};
 
 // ── Writing ─────────────────────────────────────────────────────────
 
@@ -133,7 +243,173 @@ test("a filename that supplied its own title is not pinned", async () => {
   assert.deepEqual(folderMap(h), {}, "a flat library directory was pinned");
 });
 
+test("a pick the filename did not name pins the folder the walk found", async () => {
+  // "AnimePahe Bleach - Sennen Kessen-hen - 41" names no show TMDB has, so the
+  // folder beside it is the only thing that named one. Without the pin, every
+  // episode of the cour costs the whole search again.
+  const h = boot({ routes: BLEACH_ROUTES });
+  await manualPickShow(h, BLEACH_FILE, { id: 30984, media_type: "tv", name: "Bleach" }, 2, 40);
+  assert.ok(selected(h), "the manual pick did not take");
+  assert.equal(selected(h).code, "S02E41");
+
+  const pins = folderMap(h);
+  assert.deepEqual(Object.keys(pins), ["Bleach TYBW The Calamity"],
+    `expected the cour folder, got ${JSON.stringify(pins)}`);
+  assert.equal(pins["Bleach TYBW The Calamity"].tmdbId, "30984");
+  assert.equal(pins["Bleach TYBW The Calamity"].season, 2);
+});
+
+test("a pick the filename did name pins nothing, however good the folder looks", async () => {
+  // The guard, with a directory the walk is happy to name: the filename
+  // already carried the show, so the folder above it is the media folder as
+  // often as it is the show's own.
+  const h = boot({ routes: { "/3/search/tv": SEVERANCE_RESULTS } });
+  await manualPick(h, "file:///Users/me/Stuff/Severance S01E01.mkv");
+  assert.ok(selected(h), "the manual pick did not take");
+  assert.deepEqual(folderMap(h), {}, "a directory the filename did not need was pinned");
+});
+
 // ── Reading ─────────────────────────────────────────────────────────
+
+test("a pick carries to the other files in the same cour", async () => {
+  // The whole point, on the folder that started it. "… - 42" reads as season 1
+  // episode 42, and season 1 of this show *has* an episode 42 — the 2004
+  // series' one. Only the season the pick was made in puts the number where it
+  // belongs, and without it the plugin saved that other episode.
+  const h = boot({ routes: BLEACH_ROUTES });
+  await manualPickShow(h, BLEACH_FILE, { id: 30984, media_type: "tv", name: "Bleach" }, 2, 40);
+  assert.equal(selected(h).code, "S02E41");
+
+  const before = h.fetchCalls.length;
+  h.iina._emit("fileChanged", { url: BLEACH_FILE.replace("_-_41_", "_-_42_") });
+  await settle();
+  assert.equal(selected(h).code, "S02E42", "the next file did not follow");
+
+  // Beside the pick (S02E42) the entry records what the filename claimed
+  // (season 1, episode 42), which is what keeps the next replay from calling
+  // the season a stale entry.
+  const entry = JSON.parse(h.localStorage.getItem("epinfo_url_map"))[BLEACH_FILE.replace("_-_41_", "_-_42_")];
+  assert.equal(entry.parsedSeason, 1);
+  assert.equal(entry.parsedEpisode, 42);
+
+  h.iina._emit("fileChanged", { url: BLEACH_FILE.replace("_-_41_", "_-_43_") });
+  await settle();
+  assert.equal(selected(h).code, "S02E43");
+
+  // No search at any point: the pin names the show, and its season puts the
+  // number back where it belongs.
+  assert.deepEqual(searchedQueries(h.fetchCalls.slice(before)).filter(Boolean), [],
+    "a pinned folder fell back to searching");
+});
+
+test("a number no season holds is left to the user", async () => {
+  // The fallback is not a promise: with the number in neither season — here
+  // the assumed season is 366 episodes long and still has no 999 — the pills
+  // stay up, on the season the folder remembers, and nothing is saved.
+  const h = pinnedCour();
+  h.iina._emit("fileChanged", { url: BLEACH_FILE.replace("_-_41_", "_-_999_") });
+  await settle();
+
+  assert.equal(selected(h), null, "an episode that exists in no season was saved");
+  const ep = h.document.getElementById("ep").innerHTML;
+  assert.match(ep, /no episode 999 in season 2/, ep);
+  // The panel stays on the season the folder remembers: the second look is
+  // silent, and it must not repaint the season it passed through.
+  assert.match(h.document.getElementById("panel").innerHTML,
+    /class="pill on" onclick="pickSeason\(2\)"/, "the season pills did not stay on the folder's season");
+});
+
+test("a season the filename stated outranks the folder's memory", async () => {
+  // "S01E05" says which season it is. The pin remembers season 2 from the
+  // user's last pick in the folder, and must not drag the file there.
+  const h = pinnedCour();
+  h.iina._emit("fileChanged", { url: BLEACH_DIR + "/Bleach.S01E05.1080p.mkv" });
+  await settle();
+  assert.equal(selected(h).code, "S01E05");
+});
+
+test("an episode saved under the season the folder disagrees with is rebuilt", async () => {
+  // What the files looked like before the folder's season was used: 42 saved
+  // as the 2004 series' episode 42, under a season the pin says is 2. The
+  // entry cannot notice that on its own — the number is in both seasons — so
+  // the folder's own answer retires it.
+  const h = pinnedCour();
+  const url = BLEACH_FILE.replace("_-_41_", "_-_42_");
+  h.localStorage.setItem("epinfo_url_map", JSON.stringify({
+    [url]: {
+      showTitle: "Bleach", epTitle: "Ep 42", code: "S01E42", season: 1, episode: 42,
+      tmdbId: "30984", isMovie: false, logoUrl: "", context: "", absoluteFrom: null,
+      parsedSeason: 1, parsedEpisode: 42, lastSeen: Date.now()
+    }
+  }));
+
+  h.iina._emit("fileChanged", { url });
+  await settle();
+  assert.equal(selected(h).code, "S02E42", "the entry was not rebuilt from the folder's season");
+
+  // …and only once: the rebuilt entry agrees with the folder, so the next
+  // return is a restore.
+  h.iina._emit("fileChanged", { url: "file:///v/Some Other Film 2019.mkv" });
+  await settle();
+  const before = h.fetchCalls.length;
+  h.iina._emit("fileChanged", { url });
+  await settle();
+  assert.equal(h.fetchCalls.length, before, "the rebuilt entry was rebuilt again");
+  assert.equal(selected(h).code, "S02E42");
+});
+
+test("a recut's counter places the episode in the season the folder remembers", async () => {
+  // The source numbers these 1069 and up, past every episode TMDB lists for
+  // the show, so the arithmetic can place season 36 and no episode of it. The
+  // filename's own counter is the number season 36 is actually numbered by —
+  // and the pin is what says so, which is why one pick per folder is enough.
+  const h = pinnedRecut();
+  h.iina._emit("fileChanged", { url: ONE_PACE_FILE });
+  await settle();
+
+  const info = selected(h);
+  assert.ok(info, "the episode was not selected");
+  assert.equal(info.code, "S36E09");
+  assert.equal(info.showTitle, "One Pace");
+  // The entry records the absolute number it was built from, as every entry
+  // built from one does.
+  const entry = JSON.parse(h.localStorage.getItem("epinfo_url_map"))[ONE_PACE_FILE];
+  assert.equal(entry.absoluteFrom, 1071);
+});
+
+test("without a pin, a recut's counter is not guessed at", async () => {
+  // The counter means nothing against the series a recut re-cuts: "Egghead 09"
+  // is not episode 9 of the original run. The season is all that can be known,
+  // so the pills are left for the user.
+  const h = boot({ routes: ONE_PACE_ROUTES });
+  h.iina._emit("fileChanged", { url: ONE_PACE_FILE });
+  await settle();
+
+  assert.equal(selected(h), null, "an episode was invented from the counter");
+  assert.match(h.document.getElementById("panel").innerHTML, /pickSeason\(36\)/,
+    "the picker should be left on the season the arithmetic found");
+});
+
+test("a film in a pinned folder is identified as a film", async () => {
+  // A pin names a series, and a folder can hold films beside its episodes —
+  // the watching root, or a series folder someone dropped a film into. They
+  // must not be read as episodes of whatever series was picked there.
+  const h = pinnedCour({ routes: { "/3/search/movie": FIGHT_CLUB_RESULTS, "/3/movie/550": FIGHT_CLUB_DETAIL } });
+  h.iina._emit("fileChanged", { url: BLEACH_DIR + "/Fight%20Club%201999%201080p%20BluRay%20x264-GRP.mkv" });
+  await settle();
+
+  const info = selected(h);
+  assert.ok(info, "the film was not identified");
+  assert.equal(info.isMovie, true);
+  assert.equal(info.epTitle, "Fight Club");
+  assert.equal(h.fetchCalls.filter((u) => u.includes("/3/tv/")).length, 0,
+    "the film was asked as a series");
+
+  // …and the pin is untouched for the folder's episodes, season and all.
+  h.iina._emit("fileChanged", { url: BLEACH_FILE.replace("_-_41_", "_-_42_") });
+  await settle();
+  assert.equal(selected(h).code, "S02E42");
+});
 
 test("a later file in a pinned folder resolves with no search at all", async () => {
   const h = boot({ routes: { "/3/search/tv": SEVERANCE_RESULTS } });
@@ -169,7 +445,8 @@ test("a pin reaches into subdirectories", async () => {
   assert.equal(picks.length, picksBefore + 1, "a file inside Season 2 did not resolve");
   assert.equal(picks[picks.length - 1].payload.showTitle, "Severance");
   // The pin names the show; the "Season 2" directory and the bare "03" still
-  // decide the episode.
+  // decide the episode. The pin's own remembered season is 1, from the pick
+  // above, and must not drag the file back there.
   assert.equal(picks[picks.length - 1].payload.code, "S02E03");
 });
 

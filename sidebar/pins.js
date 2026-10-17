@@ -81,7 +81,7 @@ function parseFolderHints(url) {
     var inner = /\b(?:season|staffel|saison|temporada|sezon|staffa|stor)[\s._-]*(\d{1,3})\b/i.exec(seg);
     if (inner) {
       if (out.season === null) out.season = parseInt(inner[1], 10);
-      var rest = cleanTitle(seg.replace(inner[0], " "), null);
+      var rest = cleanTitle(seg.replace(inner[0], " "), null, true);
       if (isRealTitle(rest)) { out.title = rest; out.dir = seg; break; }
       continue;
     }
@@ -89,6 +89,15 @@ function parseFolderHints(url) {
     // downstream consumes a directory year — isMovie reads the filename's own
     // — so the walk simply stops here.
     if (/^(?:19|20)\d{2}$/.test(seg)) break;
+    // A bare number directory is a season or a cour in the layouts libraries
+    // write: "megalobox/1/EP.1.720p.mp4" is season one, "House/4/…" season
+    // four. It only counts once a real title turns up above it — the walk
+    // continues, and a tree of nothing but numbers yields no title and so no
+    // hints at all.
+    if (/^\d{1,2}$/.test(seg)) {
+      if (out.season === null) out.season = parseInt(seg, 10);
+      continue;
+    }
     // Anything below this point describes the disk rather than the show, and
     // the walk stops rather than stepping over it: continuing upward is what
     // ended up naming a show after the user's own home directory.
@@ -99,7 +108,7 @@ function parseFolderHints(url) {
     if (isDescriptorFolder(seg)) continue;
     if (FOLDER_NOISE[seg.toLowerCase().replace(/[\s._-]+/g, "")]) break;
 
-    var cleaned = cleanTitle(seg, null);
+    var cleaned = cleanTitle(seg, null, true);
     if (!isRealTitle(cleaned)) continue;
     // "The Complete Series" cleans down to an article, which is no title.
     if (/^(?:the|a|an|of|and|to|in|on|my|all|final|complete)$/i.test(cleaned)) continue;
