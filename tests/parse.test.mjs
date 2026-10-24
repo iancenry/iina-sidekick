@@ -173,6 +173,38 @@ test("a name with neither a code nor a year is left alone", () => {
   assert.equal(p.code, null);
 });
 
+test("a film's release year ends the title, even with tags after it", () => {
+  // The year normally comes off at the end of cleanTitle. A release tag after
+  // it defeats that pass, and TMDB treats the year as another title word:
+  // "Captain America - Civil War 2016 4K Esubs ~ IAMABLE" returned nothing.
+  const p = parsed("Captain America - Civil War 2016 2160p 4K UHD HDR10 BluRay x265 10bit HEVC [Hindi DD5.1 640Kbps+ English TrueHD Atmos 7.1] Esubs ~ IAMABLE.mkv");
+  assert.equal(p.title, "Captain America - Civil War");
+  assert.equal(p.year, 2016);
+  assert.equal(p.isMovie, true);
+  assert.equal(parsed("The.Avengers.2012.1080p.BluRay.x264 ~ GROUP.mkv").title, "The Avengers");
+  assert.equal(parsed("Werewolf.by.Night.2022.1080p.DSNP.WEB-DL.mkv").title, "Werewolf by Night");
+});
+
+test("a year that is part of the title survives the film cut", () => {
+  // The parser takes the last year as the release year, so the numbers before
+  // it belong to the title: "Blade Runner 2049 (2017)".
+  assert.equal(parsed("1917.2019.1080p.BluRay.x264.mkv").title, "1917");
+  assert.equal(parsed("Blade.Runner.2049.2017.1080p.mkv").title, "Blade Runner 2049");
+  assert.equal(parsed("Wonder.Woman.1984.2020.1080p.mkv").title, "Wonder Woman 1984");
+  assert.equal(parsed("2012.2009.1080p.mkv").title, "2012");
+  assert.equal(parsed("2012.mkv").title, "2012");
+});
+
+test("an audio-track bracket is not mistaken for a series name", () => {
+  const p = parsed("[Hindi DD5.1 640Kbps+ English TrueHD Atmos 7.1] Captain America - Civil War 2016 1080p.mkv");
+  assert.deepEqual(Array.from(p.altTitles.strong), []);
+  const one = parsed("[One Pace][1062-1063] Egghead 04 [1080p][En Sub][FD5592BE].mp4");
+  assert.deepEqual(Array.from(one.altTitles.strong), ["One Pace"]);
+  const languages = parsed("[Hindi-Tamil-Telugu + English] Up 2009 1080p.mkv");
+  assert.deepEqual(Array.from(languages.altTitles.strong), []);
+  assert.deepEqual(Array.from(languages.altTitles.weak), []);
+});
+
 test("1917 is a title, not an episode number", () => {
   const p = parsed("1917.2019.1080p.BluRay.x264.mkv");
   assert.equal(p.year, 2019);

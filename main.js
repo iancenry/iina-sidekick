@@ -162,6 +162,8 @@ var sceneSeq           = 0;      // scene-lookup generation, abandoned like load
 var dddShowCache       = {};     // "tmdbId" -> { ratings: [...], stats: {...} }
 var currentVideoUrl    = "";     // url of currently loaded file, sent to sidebar so it can
                                  // restore per-URL TMDB info on re-play
+var fileLoadSeq        = 0;      // bumped per file-loaded, so the sidebar can tell a real
+                                 // reload from its own sidebar-ready re-send of fileChanged
 var audioLangPrefs     = [];     // preferred audio languages, canonical codes, from the sidebar
 var subLangPrefs       = [];     // same, for subtitles
 var preferSdh          = false;  // opt-in: prefer SDH/HI-titled subtitle tracks
@@ -297,15 +299,19 @@ function segmentsFromChapters() {
   return out;
 }
 
-// 2. The three databases. All key on IMDB id + season + episode, which
-//    resolveImdbIds() has already produced for us.
-async function segmentsFromApis(imdbId, season, episode) {
+// 2. The three databases. All key on IMDB id, and TV answers add season and
+//    episode. IntroDB needs `is_movie=true` to answer for a film at all;
+//    without it the request is a 400 and the provider contributes nothing.
+async function segmentsFromApis(imdbId, season, episode, isMovie) {
   var out = [];
   if (!imdbId) return out;
 
   var qs = "imdb_id=" + encodeURIComponent(imdbId);
-  if (season)  qs += "&season=" + encodeURIComponent(season);
-  if (episode) qs += "&episode=" + encodeURIComponent(episode);
+  if (!isMovie) {
+    if (season)  qs += "&season=" + encodeURIComponent(season);
+    if (episode) qs += "&episode=" + encodeURIComponent(episode);
+  }
+  var introdbQs = qs + (isMovie ? "&is_movie=true" : "");
 
   async function grab(label, url, parse) {
     try {
@@ -320,8 +326,9 @@ async function segmentsFromApis(imdbId, season, episode) {
   }
 
   await Promise.all([
-    // IntroDB: /segments returns every type, /intro is intros-only.
-    grab("IntroDB", "https://api.introdb.app/segments?" + qs, function(b) {
+    // IntroDB: /segments returns every type, /intro is intros-only. Movies
+    // use the is_movie form and carry credits, not an intro.
+    grab("IntroDB", "https://api.introdb.app/segments?" + introdbQs, function(b) {
       ["intro", "recap", "outro"].forEach(function(k) {
         if (b[k]) pushSegment(out, k, b[k].start_sec, b[k].end_sec, "introdb");
       });
@@ -599,7 +606,7 @@ async function resolveSegmentsInner(info, forceRefresh) {
   // sequential, so every non-anime title sat through the whole ARM budget
   // before a single community database was contacted.
   var malPromise = malIdFor(imdb, info.season);
-  var remotePromise = segmentsFromApis(imdb, info.season, info.episode);
+  var remotePromise = segmentsFromApis(imdb, info.season, info.episode, info.isMovie);
 
   var mal = await malPromise;
   if (!live()) { abandoned(); return; }
@@ -860,6 +867,18 @@ function startTimeWatcher() {
           }
         }
       }
+      // A scene that has already auto-skipped stays latched so Undo cannot
+      // re-skip it on the way through. That latch used to outlive the pass
+      // that set it, so rewinding to watch the scene again crossed the line
+      // with the scene still marked skipped and the trigger silently never
+      // fired. Coming back before the trigger is the user asking for that
+      // stretch again, so arm it. Undo lands one second before the scene,
+      // inside the margin, and therefore does not re-arm.
+      for (var ra = 0; ra < scenes.length; ra++) {
+        var sr = scenes[ra];
+        if (sr.skipped && t < sr.start - SCENE_REARM_MARGIN) sr.skipped = false;
+      }
+
       // Auto-skip only fires when playback crosses the line in one small step.
       // A seek is a jump larger than SCENE_SEEK_GAP and lands where the user
       // pointed on purpose, so it must not trigger a skip.
@@ -877,13 +896,19 @@ function startTimeWatcher() {
 
       // Cards: with the feature on, every scene's lead card; with it off,
       // only auto scenes — and only when their card setting keeps the escape
-      // hatch. The undo card owns the overlay until its timer ends.
-      if (dddEnabled || dddAutoCard) {
+      // hatch. The user's own skip/warn marks are not the databases' data: a
+      // mark with no card cannot do anything, so it shows even when the DDD
+      // toggle is off. Local auto marks still follow the auto-card setting.
+      var localCard = false;
+      for (var lc = 0; lc < scenes.length; lc++) {
+        if (scenes[lc].local && scenes[lc].action !== "auto") { localCard = true; break; }
+      }
+      if (dddEnabled || dddAutoCard || localCard) {
         if (sceneMode === "undo") {
           // A fresh scene's window takes precedence over the receipt.
           for (var u = 0; u < scenes.length; u++) {
             if (scenes[u].skipped) continue;
-            if (!dddEnabled && scenes[u].action !== "auto") continue;
+            if (!dddEnabled && scenes[u].action !== "auto" && !scenes[u].local) continue;
             if (scenes[u].action === "auto" && !dddAutoCard) continue;
             if (scenes[u] !== activeScene && t >= scenes[u].start - dddLead && t < scenes[u].start) {
               showSceneCue(scenes[u]);
@@ -898,7 +923,7 @@ function startTimeWatcher() {
           for (var j = 0; j < scenes.length; j++) {
             var s2 = scenes[j];
             if (s2.skipped) continue;
-            if (!dddEnabled && s2.action !== "auto") continue;
+            if (!dddEnabled && s2.action !== "auto" && !s2.local) continue;
             if (s2.action === "auto" && !dddAutoCard) continue;
             if (t >= s2.start - dddLead && t < s2.start) { cue = s2; break; }
           }
@@ -950,6 +975,10 @@ var SCENE_MERGE_GAP = 10;
 // A playhead jump larger than this is a seek, not playback: a seek lands
 // where the user pointed on purpose and must not trigger an auto-skip.
 var SCENE_SEEK_GAP = 5;
+// How far before a scene the playhead must be for a latched auto-skip to arm
+// again. Undo lands one second before the scene, so this margin keeps that
+// pass from re-arming and skipping straight back over it.
+var SCENE_REARM_MARGIN = 1.5;
 // How long the undo card stays after an auto-skip.
 var UNDO_MS = 10000;
 // One entry per show watched, held for the session like the segment cache.
@@ -1285,7 +1314,8 @@ async function resolveScenesInner(info, forceRefresh) {
 
   var list = [], flags = [];
   // The databases need the feature's key and toggle; the user's own marks do
-  // not, so an auto mark keeps skipping even with scene cues switched off.
+  // not. An auto mark skips with scene cues off, and a local skip/warn mark
+  // keeps its card (see the card gate in startTimeWatcher).
   if (dddEnabled && dddKey && info.tmdbId) {
     // One fetch per show per session: the episode-level filtering is
     // client-side, so the second episode of a show costs nothing.
@@ -2488,7 +2518,9 @@ function registerSidebarHandlers() {
     clean.sort(function(a, b) { return a.start - b.start; });
     localMarks = clean;
     // Rebuilt even with scene cues off, because auto marks are live actions.
-    if (currentEpisode) resolveScenes(currentEpisode);
+    // Local marks do not need an identification: {} is enough for resolveScenes
+    // to skip the databases, append the marks and arm the watcher.
+    resolveScenes(currentEpisode || {});
   });
 
   // The subtitle tag scan. Registered here with the other sidebar handlers,
@@ -2521,10 +2553,10 @@ function registerSidebarHandlers() {
     dddEnabled = !!(d && d.enabled);
     sceneSeq++;
     if (!dddEnabled) {
-      if (currentEpisode) {
+      if (currentEpisode || localMarks.length) {
         // Rebuild rather than clear: the databases' cues and flags drop out,
         // local marks stay, and the sidebar's list clears via the report.
-        resolveScenes(currentEpisode);
+        resolveScenes(currentEpisode || {});
       } else {
         scenes = [];
         dddFlags = [];
@@ -2534,8 +2566,8 @@ function registerSidebarHandlers() {
         syncTimeWatcher();
         reportScenes([], [], false);
       }
-    } else if (currentEpisode) {
-      resolveScenes(currentEpisode);
+    } else if (currentEpisode || localMarks.length) {
+      resolveScenes(currentEpisode || {});
       autoScanStep();
       tryLoadCachedSubtitle();
     }
@@ -2556,12 +2588,13 @@ function registerSidebarHandlers() {
   });
 
   // Sidebar finished its init and is ready to receive messages.
-  // Re-emit the current file's URL so it can do its URL→episode lookup
-  //. The original fileChanged from file-loaded may have
-  // arrived before sidebar handlers were registered.
+  // Re-emit the current file's URL so it can do its URL→episode lookup.
+  // The original fileChanged from file-loaded may have arrived before
+  // sidebar handlers were registered. The load id is the one file-loaded
+  // assigned, so the sidebar can tell this handshake from a real reload.
   sidebar.onMessage("sidebarReady", function() {
     if (currentVideoUrl) {
-      sidebar.postMessage("fileChanged", { url: currentVideoUrl });
+      sidebar.postMessage("fileChanged", { url: currentVideoUrl, load: fileLoadSeq });
     }
   });
 
@@ -2645,7 +2678,11 @@ event.on("iina.file-loaded", function() {
   // capture and both messages below, and the sidebarReady handshake has
   // nothing to re-send without a URL, so that file was never identified.
   try { currentVideoUrl = core.status.url || ""; } catch(e) { currentVideoUrl = ""; }
-  sidebar.postMessage("fileChanged", { url: currentVideoUrl });
+  // A real reload of the same path is a new load, not a duplicate of the
+  // sidebar-ready re-send below: the id is what lets the sidebar tell them
+  // apart. Without it a replay was swallowed and its marks never came back.
+  fileLoadSeq++;
+  sidebar.postMessage("fileChanged", { url: currentVideoUrl, load: fileLoadSeq });
   sidebar.postMessage("overlayStatus", { text: "Select an episode, then pause" });
   setupSidebar();
   // The preferred language/SDH selection. The track list is not always

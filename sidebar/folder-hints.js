@@ -54,7 +54,20 @@ function isDescriptorFolder(seg) {
 var BRACKET_NOISE = {
   multiple: 1, multi: 1, subtitle: 1, subtitles: 1, subs: 1, sub: 1,
   audio: 1, dual: 1, batch: 1, uncensored: 1, dubbed: 1, english: 1,
-  softsub: 1, hardsub: 1, softsubs: 1, hardsubs: 1, burn: 1, burnt: 1
+  softsub: 1, hardsub: 1, softsubs: 1, hardsubs: 1, burn: 1, burnt: 1,
+  // Audio-track language lists. A bracket group made only of these is a track
+  // label, never a series name. "english" was already here; the regional
+  // releases that write "[Hindi-Tamil-Telugu ...]" supply the rest.
+  hindi: 1, tamil: 1, telugu: 1, malayalam: 1, kannada: 1, bengali: 1,
+  marathi: 1, urdu: 1, punjabi: 1, gujarati: 1, japanese: 1, korean: 1,
+  chinese: 1, mandarin: 1, cantonese: 1, french: 1, spanish: 1, german: 1,
+  italian: 1, russian: 1, portuguese: 1, arabic: 1, turkish: 1, polish: 1,
+  dutch: 1, swedish: 1, danish: 1, norwegian: 1, finnish: 1, greek: 1,
+  hebrew: 1, thai: 1, vietnamese: 1, indonesian: 1, malay: 1,
+  // Source labels that survive cleanTitle's codec pass ("MA" is Movies
+  // Anywhere, not the film "Ma"; a bracketed one-word title still survives
+  // through the filename's own text).
+  ma: 1, dsnp: 1, hmax: 1, en: 1
 };
 
 // How far up the tree to look. "Show/Season 2/05.mkv" needs two levels, and

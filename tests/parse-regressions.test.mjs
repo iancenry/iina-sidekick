@@ -484,7 +484,9 @@ test("a leading counter outside a season folder is left alone", () => {
 // ── Fansub layouts and absolute numbering ──────────────────────────
 test("a bracket group is recovered as a series name", () => {
   const p = h.global.parseFilename("file:///v/" + FANSUB);
-  assert.deepEqual(Array.from(p.altTitles.strong), ["One Pace", "En Sub"]);
+  // "En Sub" is an English-subtitle label, not a series name. It used to be
+  // offered as a strong candidate and cost a search before the show's own name.
+  assert.deepEqual(Array.from(p.altTitles.strong), ["One Pace"]);
   // A CRC32 is not a title.
   assert.ok(!Array.from(p.altTitles.strong).includes("FD5592BE"));
   assert.equal(p.altTitles.weak.length, 0);

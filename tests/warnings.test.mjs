@@ -678,6 +678,53 @@ test("an auto category skips the scene and offers undo", async () => {
   // again on the way through.
   m.fromWebView("overlay", "undoScene", {});
   assert.deepEqual(m.sink.seeks, [620, 604]);
+
+  // The landing is inside the re-arm margin, so playing through the scene
+  // again must still not re-skip it. Only a real rewind does that.
+  mpvProps["time-pos"] = 604;
+  m.emit("mpv.time-pos.changed");
+  mpvProps["time-pos"] = 605.2;
+  m.emit("mpv.time-pos.changed");
+  assert.deepEqual(m.sink.seeks, [620, 604],
+    "undo re-armed the scene and skipped straight back over it");
+});
+
+test("rewinding before an auto mark arms it again", async () => {
+  // An auto skip latches its scene so Undo cannot loop. The latch used to
+  // outlive the pass that set it: rewinding before the trigger and playing
+  // through again crossed the line with the scene still skipped, so the
+  // user's own trigger silently did nothing on the second pass.
+  const mpvProps = { duration: 4000, "time-pos": 0 };
+  const m = loadMain({
+    status: { paused: false, duration: 4000, url: "file:///v/x2.mkv" },
+    mpvProps
+  });
+  m.emit("iina.window-loaded");
+  m.runTimers();
+  m.fromWebView("sidebar", "setSceneMarks", { marks: [
+    { label: "your mark", start: 1000, safe: 1030, action: "auto" }
+  ] });
+  m.fromWebView("sidebar", "episodeSelected", FILM);
+  await settle();
+  assert.equal(m.global.scenes.length, 1, "the mark did not reach the cue list");
+
+  mpvProps["time-pos"] = 999.5;
+  m.emit("mpv.time-pos.changed");
+  mpvProps["time-pos"] = 1000.4;
+  m.emit("mpv.time-pos.changed");
+  assert.deepEqual(m.sink.seeks, [1030], "the first pass did not auto-skip");
+  assert.equal(m.global.scenes[0].skipped, true);
+
+  mpvProps["time-pos"] = 900;                   // rewind to before the trigger
+  m.emit("mpv.time-pos.changed");
+  assert.equal(m.global.scenes[0].skipped, false, "the rewind left the mark latched");
+
+  mpvProps["time-pos"] = 999.5;
+  m.emit("mpv.time-pos.changed");
+  mpvProps["time-pos"] = 1000.4;
+  m.emit("mpv.time-pos.changed");
+  assert.deepEqual(m.sink.seeks, [1030, 1030],
+    "going back did not let the auto mark fire again");
 });
 
 test("cancelling an auto cue keeps the scene, with the manual offer left", async () => {
@@ -821,6 +868,32 @@ test("local marks work without a DDD key", async () => {
   assert.equal(m.listening("mpv.time-pos.changed"), true, "no observer was armed for the mark");
 });
 
+test("a local mark becomes a cue with no identification at all", async () => {
+  const m = loadMain({
+    status: { paused: false, duration: 4000, url: "file:///v/a.mkv" },
+    mpvProps: { duration: 4000 }
+  });
+  m.emit("iina.window-loaded");
+  m.runTimers();
+  m.fromWebView("sidebar", "setDddEnabled", { enabled: true });
+  m.fromWebView("sidebar", "setSceneMarks", {
+    marks: [{ label: "your mark", start: 30, safe: 60 }]
+  });
+  await settle();
+  assert.equal(m.global.currentEpisode, null, "the fixture accidentally identified something");
+  assert.equal(m.global.scenes.length, 1,
+    "the mark did not become a cue without an identification");
+  assert.equal(m.global.scenes[0].local, true);
+  assert.equal(m.listening("mpv.time-pos.changed"), true,
+    "no observer was armed for the mark");
+
+  // The unidentified file's marks must survive the feature toggle too; only
+  // the databases' cues are meant to drop out.
+  m.fromWebView("sidebar", "setDddEnabled", { enabled: false });
+  assert.equal(m.global.scenes.length, 1,
+    "switching scene cues off dropped the file's own mark");
+});
+
 test("a local mark's card offers its skip-to", async () => {
   const mpvProps = { duration: 4000, "time-pos": 0 };
   const m = dddSession(tvRoutes(), { mpvProps });
@@ -872,7 +945,7 @@ test("a mark's own type decides its card, including auto", async () => {
   assert.deepEqual(m.sink.seeks, [1030], "the auto mark did not skip at its start");
 });
 
-test("an auto mark still skips when scene cues are off", async () => {
+test("local marks keep their cards when scene cues are off", async () => {
   const mpvProps = { duration: 4000, "time-pos": 0 };
   const m = dddSession(tvRoutes(), { mpvProps });
   m.fromWebView("sidebar", "setSceneMarks", { marks: [
@@ -887,12 +960,16 @@ test("an auto mark still skips when scene cues are off", async () => {
   assert.equal(m.posted("sidebar", "scenesResult").pop().count, 0,
     "the databases' cue was not dropped from the list");
 
-  // A skip mark is a cue and stays down with cues off...
+  // The user's own skip mark still cards with the databases off: without the
+  // card there is no way to take the skip, so the mark would do nothing.
   mpvProps["time-pos"] = 485;
   m.emit("mpv.time-pos.changed");
-  assert.equal(m.posted("overlay", "showCue").length, 0, "a skip mark carded with cues off");
+  const cue = m.posted("overlay", "showCue").pop();
+  assert.ok(cue, "the local mark's card was suppressed with cues off");
+  assert.equal(cue.label, "skippy");
+  assert.equal(cue.mode, "skip");
 
-  // ...but an auto mark is an action and fires.
+  // An auto mark is an action and fires without a card or a toggle.
   mpvProps["time-pos"] = 999.5;
   m.emit("mpv.time-pos.changed");
   mpvProps["time-pos"] = 1000.4;
@@ -1632,6 +1709,89 @@ test("marking a trigger then a skip-to stores and pushes the pair", () => {
     "the new mark was not pushed to main.js");
   assert.match(h.document.getElementById("ddd-marks").innerHTML, /10:00/,
     "the list was not painted");
+});
+
+const UNIDENTIFIED = "file:///v/Unidentified Movie 2024.mkv";
+
+test("local marks work before the file is identified", () => {
+  const h = loadSidebar({ storage: {} });
+  h.global.currentVideoUrl = UNIDENTIFIED;
+  h.global.paintMarks();
+  assert.equal(h.document.getElementById("ddd-mark-trigger").style.display, "block",
+    "the trigger button was hidden without a TMDB match");
+  assert.equal(h.document.getElementById("ddd-mark-scan").style.display, "block",
+    "the scan button was hidden without a TMDB match");
+  assert.match(h.document.getElementById("ddd-marks").innerHTML, /Not identified/);
+
+  h.global.doMarkTrigger();
+  h.iina._emit("timeCaptured", { kind: "trigger", seconds: 100 });
+  h.iina._emit("timeCaptured", { kind: "safe", seconds: 130 });
+
+  const marks = storedMarks(h, "file:" + UNIDENTIFIED);
+  assert.equal(marks.length, 1, "the mark was not stored under the file");
+  assert.equal(marks[0].start, 100);
+  assert.equal(marks[0].safe, 130);
+  assert.equal(posted(h, "setSceneMarks").pop().marks.length, 1,
+    "the mark was not pushed to main.js");
+});
+
+test("a subtitle scan stores marks for an unidentified file", () => {
+  const h = loadSidebar({ storage: {} });
+  h.global.currentVideoUrl = UNIDENTIFIED;
+  h.iina._emit("subScanResult", {
+    ok: true, cues: 1,
+    proposals: [{ label: "moaning", start: 50, safe: 60 }]
+  });
+  const marks = storedMarks(h, "file:" + UNIDENTIFIED);
+  assert.equal(marks.length, 1, "the proposal was lost without an identification");
+  assert.equal(marks[0].label, "moaning");
+});
+
+test("marks made before identification move onto the title when it lands", () => {
+  const h = loadSidebar({ storage: {
+    epinfo_marks: JSON.stringify({ ["file:" + UNIDENTIFIED]: {
+      marks: [{ label: "x", start: 10, safe: 20 }], lastSeen: 1
+    } })
+  }});
+  h.global.currentVideoUrl = UNIDENTIFIED;
+  const info = {
+    showTitle: "Movie", epTitle: "X", tmdbId: "999",
+    season: null, episode: null, isMovie: true
+  };
+  assert.equal(h.global.adoptFileMarks(info), true);
+  const all = JSON.parse(h.localStorage.getItem("epinfo_marks"));
+  assert.equal(all["file:" + UNIDENTIFIED], undefined, "the file key stayed");
+  assert.equal((all["999:-1:-1"].marks || []).length, 1, "the mark did not move");
+});
+
+test("clearing the identification keeps the file's marks", () => {
+  const h = loadSidebar({ storage: {
+    epinfo_ep: JSON.stringify(EP_INFO),
+    epinfo_marks: JSON.stringify({ ["file:" + UNIDENTIFIED]: {
+      marks: [{ label: "still here", start: 10, safe: 20 }], lastSeen: 1
+    } })
+  }});
+  h.global.currentVideoUrl = UNIDENTIFIED;
+  h.global.doClear();
+  const all = JSON.parse(h.localStorage.getItem("epinfo_marks"));
+  assert.ok(all["file:" + UNIDENTIFIED], "the file's marks were deleted with the identification");
+  assert.match(h.document.getElementById("ddd-marks").innerHTML, /still here/);
+});
+
+test("a new unidentified file pushes its own marks to main", () => {
+  const h = loadSidebar({ storage: {
+    epinfo_tmdb_key: "",
+    epinfo_marks: JSON.stringify({ ["file:" + UNIDENTIFIED]: {
+      marks: [{ label: "pushed", start: 10, safe: 20 }], lastSeen: 1
+    } })
+  }});
+  h.iina._emit("fileChanged", { url: UNIDENTIFIED });
+  const pushed = posted(h, "setSceneMarks").pop();
+  assert.equal(pushed.marks.length, 1, "the file's marks were not pushed");
+  assert.equal(pushed.marks[0].label, "pushed");
+  const names = h.iina._posted.map((x) => x.name);
+  assert.ok(names.lastIndexOf("clearEpisode") < names.lastIndexOf("setSceneMarks"),
+    "main.js cleared the marks after they were pushed");
 });
 
 test("a mark saved warn-only carries no target", () => {

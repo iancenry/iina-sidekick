@@ -108,6 +108,8 @@ function applyRecent(idx) {
   // panel standing, so a card reading S36E04 could sit above a grid reading
   // S01. The card lives outside the panel, so it survives this.
   try { localStorage.setItem("epinfo_ep", JSON.stringify(r.info)); } catch(e) {}
+  // Local marks made before this pick were under the file's URL key.
+  if (typeof adoptFileMarks === "function") adoptFileMarks(r.info);
   saveCurrentUrlInfo(r.info);
   showSaved(r.info);
   // The marks for this identification travel ahead of the selection, as they

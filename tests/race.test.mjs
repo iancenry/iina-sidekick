@@ -60,6 +60,44 @@ test("a duplicate fileChanged leaves the in-flight lookup alone", async () => {
   assert.ok(h.timers._pending().length > 0, "the give-up timer was cancelled");
 });
 
+test("a fresh load of the same URL is not a duplicate", async () => {
+  // Reopening the same file used to be swallowed by the URL-only duplicate
+  // guard: main cleared its identification and marks on file-loaded, the
+  // sidebar ignored the repeated URL, and nothing came back. The load id is
+  // what separates that from the sidebar-ready handshake.
+  const h = boot({ storage: {
+    epinfo_marks: JSON.stringify({
+      "1399:1:2": {
+        marks: [{ label: "your mark", start: 100, safe: 130, action: "auto" }],
+        lastSeen: Date.now()
+      }
+    })
+  } });
+  const url = "file:///v/Severance S01E02.mkv";
+  h.iina._emit("fileChanged", { url, load: 1 });
+  await settle();
+  assert.equal(picks(h).length, 1, "the first load did not identify");
+  const before = h.fetchCalls.length;
+
+  h.iina._emit("fileChanged", { url, load: 2 });   // the same file, reopened
+  await settle();
+  assert.equal(picks(h).length, 2, "the reload was swallowed as a duplicate");
+  assert.equal(h.fetchCalls.length, before,
+    "the remembered entry was re-identified instead of restored");
+
+  // The marks are the reason the reload matters: they were cleared in main on
+  // file-loaded, so the restore has to push them again.
+  const pushed = h.iina._posted.filter((p) => p.name === "setSceneMarks");
+  const last = pushed[pushed.length - 1];
+  assert.ok(last, "no marks were pushed");
+  assert.equal(last.payload.marks.length, 1, "the reload dropped the title's marks");
+  assert.equal(last.payload.marks[0].start, 100);
+
+  h.iina._emit("fileChanged", { url, load: 2 });   // the sidebar-ready handshake
+  await settle();
+  assert.equal(picks(h).length, 2, "the handshake was treated as a reload");
+});
+
 test("a fileChanged for a different file does supersede the first", async () => {
   const h = boot();
   const a = "file:///v/Severance S01E02.mkv";
@@ -463,7 +501,13 @@ test("the previous identification does not stay live while the next lookup runs"
   await settle(5);
   assert.equal(h.localStorage.getItem("epinfo_ep"), null,
     "the previous entry stayed live while the new lookup ran");
-  assert.equal(h.global.currentMarkInfo(), null, "a mark would attach to the previous episode");
+  // The mark target falls back to the new file's own URL key; it must not keep
+  // pointing at Show A while B's lookup runs.
+  const markInfo = h.global.currentMarkInfo();
+  assert.ok(markInfo, "a mark could not be attached to the new file");
+  assert.equal(markInfo.fileUrl, "file:///v/Show B S02E01.mkv",
+    "a mark would attach to the previous episode");
+  assert.notEqual(markInfo.showTitle, "Show A");
   assert.equal(h.document.getElementById("saved").classList.contains("on"), false,
     "the previous card stayed up over the new file");
 });

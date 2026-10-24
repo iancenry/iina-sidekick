@@ -366,6 +366,8 @@ function doUnpinFolder() {
   document.getElementById("saved").classList.remove("on");
   selShow = null; selSeason = null; episodeCache = []; showTotals = null;
   iina.postMessage("clearEpisode", {});
+  iina.postMessage("setSceneMarks", { marks: marksFor(currentMarkInfo()) });
+  if (typeof paintMarks === "function") paintMarks();
   resetPanel();
   autoIdentify(currentVideoUrl);
 }
@@ -376,6 +378,9 @@ function doSetPinRemember(on) {
 
 function saveSelection(info) {
   try{localStorage.setItem("epinfo_ep", JSON.stringify(info));}catch(e){}
+  // Marks made while this file was still unidentified are under its URL key;
+  // move them onto the title before the cue pipeline is handed the list.
+  if (typeof adoptFileMarks === "function") adoptFileMarks(info);
   saveCurrentUrlInfo(info); // remember per-URL
   pushRecent(info);         // and to the recent picks list
   showSaved(info);

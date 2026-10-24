@@ -117,6 +117,40 @@ test("a film is identified by year, and a remake loses", async () => {
   assert.equal(info.airDate, "1984-02-17");
 });
 
+test("a film whose year is followed by tags is searched by its title", async () => {
+  // The year stays in the parsed title when a tag follows it, and TMDB treats
+  // it as another title word: "Captain America - Civil War 2016 4K..." got no
+  // results while the title without the year found the film immediately.
+  const h = boot({
+    routes: {
+      "/3/search/movie": (url) => {
+        const q = decodeURIComponent(url);
+        return q.includes("query=Captain America - Civil War") && !q.includes("2016")
+          ? {
+              results: [{
+                id: 100402, title: "Captain America: Civil War",
+                release_date: "2016-04-27", vote_count: 20000
+              }]
+            }
+          : { results: [] };
+      },
+      "/3/movie/100402": {
+        title: "Captain America: Civil War", release_date: "2016-04-27",
+        vote_average: 7.1, overview: "o", poster_path: "/cap.jpg", images: {}
+      }
+    }
+  });
+  await identify(h, "file:///Volumes/Transcend/watching/Captain America - Civil War 2016 2160p 4K UHD HDR10 BluRay x265 10bit HEVC [Hindi DD5.1 640Kbps+ English TrueHD Atmos 7.1] Esubs ~ IAMABLE.mkv");
+
+  const info = episodeSelected(h);
+  assert.ok(info, "the film was not selected");
+  assert.equal(info.epTitle, "Captain America: Civil War");
+  assert.equal(info.isMovie, true);
+  const queries = searchedQueries(h.fetchCalls).filter(Boolean);
+  assert.deepEqual(queries, ["Captain America - Civil War"],
+    `the year was still sent as part of the query: ${JSON.stringify(queries)}`);
+});
+
 test("a name with neither an episode code nor a year is left alone", async () => {
   const h = boot();
   const started = await identify(h, "file:///Users/me/Videos/Some Random Home Video.mp4");

@@ -11,10 +11,11 @@ var JUNK_WORDS = [
   "x264", "x265", "h264", "h265", "hevc", "avc", "av1", "xvid", "divx",
   "aac", "ac3", "eac3", "dts", "dtshd", "truehd", "atmos", "flac", "mp3",
   "opus", "dd", "ddl", "dl", "ddp", "dd5", "ddp5",
-  "10bit", "8bit", "hdr", "hdr10", "dv", "sdr", "hlg", "hdr10plus",
+  "10bit", "8bit", "hdr", "hdr10", "dv", "sdr", "hlg", "hdr10plus", "4k",
   // Channel-count and subtitle-kind tags used by Asian scene releases.
   "ch", "6ch", "2ch", "8ch", "5ch", "jpsc", "big5", "gb",
   "softsub", "hardsub", "softsubs", "hardsubs", "subbed", "subs",
+  "esub", "esubs",
   // Streaming services, which scene names carry in the middle of the title rather
   // than at the end: "The Bear ... HULU WEB-DL" searched for "The Bear HULU".
   // None of these is a word in an English title.
@@ -276,6 +277,11 @@ function cleanTitle(base, code, fragment) {
   // left "X-Men" with no title at all.
   var hyphen = t.match(/^(.+?)\s*-\s*[A-Za-z0-9]+\s*$/);
   if (hyphen && hyphen[1].trim().split(/\s+/).length >= 2) t = hyphen[1];
+  // A tilde/at release tag ("... ~ IAMABLE", "... @GROUP"). Same guard as the
+  // hyphen: only when two words are left, because "~" is also punctuation a
+  // real title can contain ("Love ~ Hate").
+  var tagged = t.match(/^(.+?)\s*[~@]\s*[A-Za-z0-9][\w.-]*\s*$/);
+  if (tagged && tagged[1].trim().split(/\s+/).length >= 2) t = tagged[1];
   // CJK characters only ever appear in scene tags, never in a title we can
   // search TMDB with.
   t = t.replace(/[\u3000-\u9fff\uf900-\ufaff\uff00-\uffef]/g, " ");
@@ -332,4 +338,21 @@ t = t.replace(JUNK_RE, " ");
 
   // Separators left dangling by the removals ("Breaking Bad -").
   return t.replace(/^[\s\-\u2013\u2014:]+|[\s\-\u2013\u2014:]+$/g, "").trim();
+}
+
+// For a film, the release year is where the title ends. cleanTitle already
+// removes a year at the very end, but a tag after it defeats that $-anchored
+// pass and leaves the year in the title: "The Avengers 2012 ~ GROUP" asks TMDB
+// for all four words and comes back empty. The parser takes the LAST year in
+// the name as the release year, so everything after it is release noise and is
+// safe to drop. Kept when nothing is left in front of the year: "2012" and
+// "1917" are titles, not dates.
+function trimFilmAtYear(title, year) {
+  if (!title || !year) return title;
+  var re = new RegExp("(?:^|\\s)" + year + "(?=\\s|$)", "g");
+  var m, last = null;
+  while ((m = re.exec(title)) !== null) last = m;
+  if (!last) return title;
+  var head = title.slice(0, last.index).replace(/[\s\-\u2013\u2014:]+$/, "").trim();
+  return head ? head : title;
 }

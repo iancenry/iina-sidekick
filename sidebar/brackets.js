@@ -24,6 +24,11 @@ function bracketTitles(base) {
     if (!isRealTitle(t)) continue;
     // No letters at all: an episode range such as "[1062-1063]", not a name.
     if (!/[a-z]/i.test(t)) continue;
+    // A bitrate is an audio-track label, e.g. "[Hindi DD5.1 640Kbps+ English
+    // TrueHD Atmos 7.1]". Being multi-word, it used to be trusted as a series
+    // name and searched before the filename's own title, where it returned
+    // nothing and burned one of the ladder's few slots.
+    if (/\b\d+(?:\.\d+)?\s*kbps\b/i.test(t)) continue;
     // A CRC32 checksum, e.g. "[FD5592BE]": hex letters only, and at least one
     // digit. Requiring the digit is what keeps real words out: every English
     // word made only of the letters a-f is short, but "Decade", "Facade" and
@@ -34,8 +39,14 @@ function bracketTitles(base) {
     // Subtitles]". Multi-word groups are otherwise taken as series names, and
     // these are searched before the filename's own title.
     var noise = true;
-    t.split(/\s+/).forEach(function(w) {
-      if (!BRACKET_NOISE[w.toLowerCase().replace(/[^\w]/g, "")]) noise = false;
+    // Hyphens separate the language names in "[Hindi-Tamil-Telugu]"; splitting
+    // on them for this check is safe because one non-noise token keeps the
+    // group ("Spider-Man" is still a title).
+    t.split(/[\s\-_./]+/).forEach(function(w) {
+      var clean = w.toLowerCase().replace(/[^\w]/g, "");
+      // "+", "-", "&" and a lone channel number are separators, not names.
+      if (!clean || /^\d+(?:\.\d+)?$/.test(clean)) return;
+      if (!BRACKET_NOISE[clean]) noise = false;
     });
     if (noise) continue;
     var bucket = /\s/.test(t) ? strong : weak;
@@ -382,6 +393,11 @@ function parseFilename(url) {
   if (years.length) {
     year = parseInt(years[years.length - 1].replace(/[^\d]/g, ""), 10);
   }
+
+  // A film's title ends at its release year. This has to happen after the year
+  // is known, and only for a film: an episode with a year in the name keeps it
+  // as part of the episode title. See trimFilmAtYear in parse.js.
+  if (!code && absolute === null && year) title = trimFilmAtYear(title, year);
 
   // Three digits is usually a counter that found its way into the title slot,
   // and searching TMDB for "01" returns nothing usable. Four digits is

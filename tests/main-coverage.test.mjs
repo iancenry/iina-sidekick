@@ -16,6 +16,11 @@ const EPISODE = {
   airDate: "", rating: "", overview: "", posterUrl: "", logoUrl: "",
   context: "", tmdbId: "1399", season: 1, episode: 1, parentImdbId: IMDB
 };
+const FILM = {
+  isMovie: true, showTitle: "Fight Club", epTitle: "Fight Club", code: "",
+  airDate: "", rating: "", overview: "", posterUrl: "", logoUrl: "", context: "",
+  tmdbId: "550", imdbId: "tt0137523", parentImdbId: "ttSHOWLEVEL"
+};
 
 function ep(n) {
   return Object.assign({}, EPISODE, { episode: n, code: "S01E0" + n });
@@ -72,6 +77,28 @@ test("a card is shown once an episode is chosen, and hidden on the next file", (
   // told when it goes away as well as when it arrives.
   assert.equal(m.posted("sidebar", "overlayShowing").pop().visible, false,
     "the sidebar was not told the card went away");
+});
+
+test("a reload of the same file is a new load, and the handshake repeats it", () => {
+  // The sidebar-ready handshake repeats fileChanged so a lookup that arrived
+  // before its handlers existed is not lost. A real reload of the same path
+  // sends the same URL, so the two are only distinguishable by a load id.
+  const m = session({ status: { paused: false, duration: 1400, url: "file:///v/a.mkv" } });
+  m.emit("iina.file-loaded");
+  m.emit("iina.file-loaded");
+
+  const sent = m.posted("sidebar", "fileChanged");
+  assert.equal(sent.length, 2, "each file-loaded must announce the file");
+  assert.equal(sent[0].url, sent[1].url, "the fixture changed the URL");
+  assert.notEqual(sent[0].load, sent[1].load,
+    "reopening the same URL reused its load id");
+
+  m.fromWebView("sidebar", "sidebarReady", {});
+  const after = m.posted("sidebar", "fileChanged");
+  assert.equal(after.length, 3, "the handshake did not re-send the file");
+  assert.equal(after[2].url, sent[1].url);
+  assert.equal(after[2].load, sent[1].load,
+    "the handshake invented a new load id instead of repeating the current one");
 });
 
 test("the overlay stays up while either the card or the pill wants it", () => {
@@ -307,17 +334,39 @@ test("a show uses its show-level id, not the episode's own", async () => {
     "the episode-level id was used, which returns nothing for other episodes");
 });
 
-test("a film uses its own id", async () => {
+test("a film uses its own id and IntroDB's movie form", async () => {
+  // IntroDB answers TV episodes on imdb_id + season + episode, but a film
+  // needs is_movie=true; without it the request is a 400 and the provider
+  // contributes nothing at all.
   const m = skipSession({});
-  m.fromWebView("sidebar", "episodeSelected", {
-    isMovie: true, showTitle: "Fight Club", epTitle: "Fight Club", code: "",
-    airDate: "", rating: "", overview: "", posterUrl: "", logoUrl: "", context: "",
-    tmdbId: "550", imdbId: "tt0137523", parentImdbId: "ttSHOWLEVEL"
-  });
+  m.fromWebView("sidebar", "episodeSelected", FILM);
   await settle();
-  const calls = m.sink.httpCalls.filter((u) => u.includes("introdb"));
-  assert.equal(calls.length > 0, true, "no lookup was made");
+  const calls = m.sink.httpCalls.filter((u) => u.indexOf("https://api.introdb.app/segments") === 0);
+  assert.equal(calls.length, 1, "IntroDB was not asked exactly once");
   assert.ok(calls[0].includes("tt0137523"), "the wrong id was used: " + calls[0]);
+  assert.ok(calls[0].includes("is_movie=true"),
+    "the film was asked for as a TV episode: " + calls[0]);
+  assert.ok(!calls[0].includes("season="), "a film lookup carried a season");
+});
+
+test("a film's IntroDB credits are read from the movie form", async () => {
+  const key = "https://api.introdb.app/segments?imdb_id=tt0137523&is_movie=true";
+  const m = skipSession({
+    [key]: { statusCode: 200, data: {
+      is_movie: true,
+      intro: null,
+      recap: null,
+      outro: { start_sec: 1200, end_sec: 1320 }
+    } }
+  });
+  m.fromWebView("sidebar", "episodeSelected", FILM);
+  await settle();
+  assert.equal(m.sink.httpCalls.filter((u) => u === key).length, 1,
+    "the movie-form IntroDB request was not made");
+  assert.equal(m.global.segments.length, 1, "the movie's credits were dropped");
+  assert.equal(m.global.segments[0].kind, "outro");
+  assert.equal(m.global.segments[0].start, 1200);
+  assert.equal(m.global.segments[0].end, 1320);
 });
 
 test("canonicalImdb normalises what TMDB hands back", () => {

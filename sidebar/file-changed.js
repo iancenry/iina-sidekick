@@ -16,14 +16,22 @@ function codeNum(v) {
 // rather than silently replayed.
 iina.onMessage("fileChanged", function(d){
   var nextUrl = (d && d.url) || "";
+  var nextLoad = (d && typeof d.load === "number") ? d.load : null;
   // A repeat of the message for the file already playing is a no-op, and it
   // has to be: main.js re-sends this on the sidebar-ready handshake. Returning
   // here is what leaves the in-flight lookup's timer and its eventual result
   // intact. Treating it as a fresh event cancelled the timer, and the lookup
   // then abandoned its own result because the timer it was waiting on had
   // gone, so the file silently failed to identify.
-  if (nextUrl === currentVideoUrl) return;
+  //
+  // The URL alone cannot tell that handshake from reopening the same file:
+  // both carry the same path. A real file-loaded gets a new load id, so the
+  // reload is processed and the handshake is not. Messages without an id keep
+  // the old URL-only dedupe.
+  var sameLoad = nextLoad === null || currentFileLoad === null || nextLoad === currentFileLoad;
+  if (nextUrl === currentVideoUrl && sameLoad) return;
   currentVideoUrl = nextUrl;
+  if (nextLoad !== null) currentFileLoad = nextLoad;
   invalidateLookups();
   // A half-finished mark belongs to the file that was playing; carrying a
   // pending trigger or an armed clear into the next one would attach it to
@@ -102,6 +110,9 @@ iina.onMessage("fileChanged", function(d){
   if (saved && !stale) {
     // URL is already identified and still correct, so restore it silently.
     try { localStorage.setItem("epinfo_ep", JSON.stringify(saved)); } catch(e) {}
+    // A mark added while the file was unidentified lives under its URL; it
+    // belongs to this title now that the cached pick has been restored.
+    if (typeof adoptFileMarks === "function") adoptFileMarks(saved);
     saveCurrentUrlInfo(saved);   // refresh lastSeen so it never ages out
     showSaved(saved);
     iina.postMessage("setSceneMarks", { marks: marksFor(saved) });
@@ -116,8 +127,10 @@ iina.onMessage("fileChanged", function(d){
     // not describe. autoIdentify repaints both the moment it lands.
     try { localStorage.removeItem("epinfo_ep"); } catch(e) {}
     document.getElementById("saved").classList.remove("on");
-    iina.postMessage("setSceneMarks", { marks: [] });
+    // clearEpisode first, because main.js drops localMarks on it. The file's
+    // own marks do not need an identification, so they go back immediately.
     iina.postMessage("clearEpisode", {});
+    iina.postMessage("setSceneMarks", { marks: marksFor(currentMarkInfo()) });
     if (typeof paintMarks === "function") paintMarks();
     // False means the filename holds nothing to search by, and the manual
     // prompt above is the whole outcome.

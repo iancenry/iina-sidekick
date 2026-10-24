@@ -134,16 +134,22 @@ function paintMarks() {
   var info = currentMarkInfo();
   if (!info) {
     el.innerHTML = '<div style="font-size:10px;color:rgba(255,255,255,.25)">' +
-      'Identify an episode first; marks attach to it.</div>';
+      'Open a file to add marks.</div>';
     paintMarkPending();
     return;
   }
   var list = marksFor(info);
+  // A file with no identification is still markable. Say so, because these
+  // marks follow the file's URL until a title is picked, not the title itself.
+  var localNote = info.local
+    ? '<div style="font-size:10px;color:rgba(255,255,255,.25);margin-bottom:4px">' +
+      'Not identified &mdash; marks are saved for this file.</div>'
+    : "";
   if (!list.length) {
-    el.innerHTML = '<div style="font-size:10px;color:rgba(255,255,255,.25)">' +
-      'No marks for this one yet.</div>';
+    el.innerHTML = localNote + '<div style="font-size:10px;color:rgba(255,255,255,.25)">' +
+      (info.local ? 'No marks for this file yet.' : 'No marks for this one yet.') + '</div>';
   } else {
-    var html = "";
+    var html = localNote;
     for (var i = 0; i < list.length; i++) {
       var m = list[i];
       html += '<div class="ddd-row"><span class="ddd-lbl">' + htmlEsc(m.label || "your mark") + '</span>' +
@@ -196,7 +202,7 @@ function doMarkTrigger() {
 // tracks carry no text, so the scan is offered but the report explains
 // itself when there is nothing readable.
 function doScanSubtitles() {
-  if (!currentMarkInfo()) { showDddMsg("Identify an episode first."); return; }
+  if (!currentMarkInfo()) { showDddMsg("Open a file first."); return; }
   var btn = document.getElementById("ddd-mark-scan");
   if (btn) { btn.disabled = true; btn.textContent = "Scanning subtitles\u2026"; }
   iina.postMessage("scanSubtitles", {});
@@ -297,7 +303,7 @@ iina.onMessage("timeCaptured", function(d) {
   }
   // A trigger capture.
   if (d.seconds == null) { showDddMsg("No playhead yet — load a video first."); return; }
-  if (!currentMarkInfo()) { showDddMsg("Identify an episode first."); return; }
+  if (!currentMarkInfo()) { showDddMsg("Open a file first."); return; }
   markPending = Number(d.seconds);
   paintMarks();
 });

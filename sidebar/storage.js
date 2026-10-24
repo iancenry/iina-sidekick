@@ -39,8 +39,11 @@ function pruneUrlMap() {
 // ── URL → episode map ─────────────────────────
 // Each video URL gets its own remembered TMDB identification so the
 // user doesn't have to re-search when re-playing the same file/stream.
-// `currentVideoUrl` is set by the fileChanged handler.
+// `currentVideoUrl` is set by the fileChanged handler. The load id that
+// produced it tells a repeat of the same URL apart from a real reload: the
+// sidebar-ready handshake repeats both, while a reopened file gets a new id.
 var currentVideoUrl = "";
+var currentFileLoad = null;
 function loadUrlMap() {
   // The shape is checked, not just the parse: a stored `null` passed the old
   // guard and then threw in Object.keys during the boot prune, skipping
@@ -143,8 +146,11 @@ function doClear() {
   descExpanded = false;
   episodeCache = [];
   showTotals   = null;
-  iina.postMessage("setSceneMarks", { marks: [] });
+  // clearEpisode first: main.js drops localMarks and the scene list on it. The
+  // file's own marks are still valid after the identification is cleared, so
+  // they are pushed after, once the fallback context exists.
   iina.postMessage("clearEpisode", {});
+  iina.postMessage("setSceneMarks", { marks: marksFor(currentMarkInfo()) });
   if (typeof resetMarkUiState === "function") resetMarkUiState();
   if (typeof paintMarks === "function") paintMarks();
   resetPanel();
@@ -154,7 +160,9 @@ function doClear() {
 // The user's own trigger/skip-to pairs, for titles the databases have not
 // timed (X2's Mystique scenes, for instance). Keyed like a DDD rating —
 // tmdbId:season:episode, with a film's indexes at -1 — so they attach to the
-// same identification the rest of the plugin uses.
+// same identification the rest of the plugin uses. A file with no
+// identification is keyed by its URL, because marks are local data and must
+// not wait for TMDB.
 //
 // Bounded like the URL and folder maps: each title's entry carries a lastSeen
 // stamp refreshed whenever its marks are used, anything untouched for six
@@ -165,7 +173,12 @@ var MARKS_MAX_AGE_MS = 180 * 86400000;
 var MARKS_TITLE_CAP = 400;
 
 function markKey(info) {
-  if (!info || !info.tmdbId) return "";
+  if (!info) return "";
+  // A file that cannot be identified still gets local marks. They are keyed by
+  // the URL so the next play of that file finds them; there is no TMDB id to
+  // attach them to yet. If an identification lands later, adoptFileMarks folds
+  // them into the title's key.
+  if (!info.tmdbId) return info.fileUrl ? "file:" + info.fileUrl : "";
   var s = info.isMovie ? -1 : Number(info.season);
   var e = info.isMovie ? -1 : Number(info.episode);
   return String(info.tmdbId) + ":" + s + ":" + e;
@@ -221,6 +234,42 @@ function setMarksFor(info, list) {
   saveMarks(all);
 }
 
+// Fold marks made before a file was identified (keyed by URL) into the title's
+// key once the identification exists. Without this they would keep living under
+// a URL key that nothing reads while the title is identified. A file mark wins
+// on a near-identical start: it is the newer edit made while the sidebar had no
+// title to save it to.
+function adoptFileMarks(info) {
+  if (!info || !info.tmdbId || !currentVideoUrl) return false;
+  var all = loadMarks();
+  var fk = "file:" + currentVideoUrl;
+  var src = markEntry(all[fk]);
+  if (!src || !src.marks.length) return false;
+  var tk = markKey(info);
+  if (!tk) return false;
+  var dst = markEntry(all[tk]);
+  var list = dst ? dst.marks.slice() : [];
+  src.marks.forEach(function(m) {
+    if (!m) return;
+    var start = Number(m.start);
+    if (!isFinite(start)) return;
+    var replaced = false;
+    for (var i = 0; i < list.length; i++) {
+      if (Math.abs(Number(list[i].start) - start) <= 5) {
+        list[i] = m;
+        replaced = true;
+        break;
+      }
+    }
+    if (!replaced) list.push(m);
+  });
+  list.sort(function(a, b) { return (Number(a.start) || 0) - (Number(b.start) || 0); });
+  all[tk] = { marks: list, lastSeen: Date.now() };
+  delete all[fk];
+  saveMarks(all);
+  return true;
+}
+
 // Age first, then the cap. Returns the number of titles dropped.
 function pruneMarks() {
   var all = loadMarks();
@@ -249,9 +298,27 @@ function pruneMarks() {
   return dropped;
 }
 
-// The identification the marks UI attaches to: whatever the saved-card
-// selection is, or null when nothing is identified.
+// What the marks UI attaches to: the saved-card identification when there is
+// one, otherwise the file being played. Marks are local data, so an unresolved
+// TMDB lookup must not hide the controls; the URL key keeps them for the next
+// play, and adoptFileMarks moves them onto the title if identification lands.
 function currentMarkInfo() {
-  try { return JSON.parse(localStorage.getItem("epinfo_ep") || "null"); }
-  catch (e) { return null; }
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem("epinfo_ep") || "null"); }
+  catch (e) { saved = null; }
+  if (saved && saved.tmdbId) return saved;
+  if (!currentVideoUrl) return null;
+  // Deliberately does not call parseFilename: that writes the parser's
+  // currentParsed, which the pick writer reads. A file-keyed mark needs only
+  // the URL.
+  var label = fileNameFromUrl(currentVideoUrl);
+  return {
+    fileUrl: currentVideoUrl,
+    local: true,
+    isMovie: false,
+    season: null,
+    episode: null,
+    showTitle: label,
+    epTitle: label
+  };
 }
